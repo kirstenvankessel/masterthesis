@@ -1,0 +1,402 @@
+---
+title: "Creation of ESCS final"
+author: "Kirsten van Kessel"
+date: "2023-11-09"
+output: html_document
+---
+
+#### Setup
+
+```{r, warning=FALSE, echo=FALSE}
+# load libraries
+library(haven)
+library(lavaan)
+library(dplyr)
+library(semPlot)
+library(mirt)
+library(ggplot2)
+library(ggcorrplot)
+library(tidyr)
+library(dexterMML)
+
+# load data
+data <- read_sav("../data/data_PISA_ESCS.sav")
+```
+
+#### Create the right values for 2PL
+
+To make sure we can perform the 2PL analysis, we need to:
+- Select country, student id, questionnaire language, and the ST011, ST012, and ST013 variables.
+- Remove the labels of the ST011, ST012, and ST013 variables. Otherwise they won't work in analyses. 
+- Recode ST011, so that a higher level indicates the presence of the indicator.
+- Recode the country specific ST011 items to 0, 1, and NA, instead of a specific value per country.
+- Make sure all the variables have a zero value. 
+
+```{r}
+# select all necessary variables
+data_homepos <- data %>% dplyr::select(CNT, CNTSTUID, LANGTEST_QQQ, ST011Q01TA:ST011Q16NA, ST011D17TA:ST011D19TA, ST012Q01TA:ST012Q09NA, ST013Q01TA)
+
+# select ST011 variables to recode
+data_ST011 <- data %>% dplyr::select(ST011Q01TA:ST011Q16NA)
+
+# Make ST011 numeric (to remove labels)
+data_homepos[colnames(data_ST011)] <- sapply(data_homepos[colnames(data_ST011)],as.numeric)
+
+# Recode ST011
+data_homepos <- data_homepos %>% mutate_at(vars(all_of(colnames(data_ST011))), list(~recode(., '1' = 1, '2' = 0)))
+
+# select ST011 country specific variables
+data_ST011_CS <- data_homepos %>% dplyr::select(ST011D17TA:ST011D19TA)
+
+# Make ST011 country specific variables characters to remove labels
+data_homepos[colnames(data_ST011_CS)] <- sapply(data_homepos[colnames(data_ST011_CS)],as.character) 
+
+# Make ST011 country specific variables numeric
+data_homepos[colnames(data_ST011_CS)] <- sapply(data_homepos[colnames(data_ST011_CS)],as.numeric) 
+
+# make function to recode CS variables to 0, 1, NA
+recode_CS <- function(var){
+  var[var %% 2 == 0 & var < 9999996] <- 0
+  var[var %% 2 == 1 & var < 9999996] <- 1
+  var[var >= 9999997] <- NA
+  return(var)
+}
+
+# apply function
+data_homepos[colnames(data_ST011_CS)] <- sapply(data_homepos[colnames(data_ST011_CS)],recode_CS)
+
+# select all other variables
+data_rest <- data %>% dplyr::select(ST012Q01TA:ST013Q01TA)
+
+# make numeric to remove labels
+data_homepos[colnames(data_rest)] <- sapply(data_homepos[colnames(data_rest)],as.numeric)
+
+# make sure they have a 0 value
+data_homepos[colnames(data_rest)] <- data_homepos[colnames(data_rest)] - 1
+
+## All variables now have the right values for the 2PL ##
+```
+
+#### Create the right dataset for 2PL using dexterMML
+
+The data is not yet in the right format. To use dexterMML on the data, we:
+- Make the data long format.
+- Give all the items that together get a separate parameter estimate a different item_id. This means that most items just get the item as item_id, country specific items get item_country as item_id, and language specific items get item_country_language as item_id. 
+
+
+```{r}
+# make long format dataset
+data_homepos_long <- data_homepos %>% pivot_longer(cols = c("ST011Q01TA":"ST013Q01TA"),
+                                                    names_to = "item",
+                                                    values_to = "item_score")
+
+colnames(data_homepos_long)[colnames(data_homepos_long) == 'CNTSTUID'] <- 'person_id'
+
+# create variable item_id
+data_homepos_long$item_id <- data_homepos_long$item
+
+# give all the CS variables an unique item_id per country
+items_CS <- c("ST011Q07TA", "ST011Q08TA", "ST011D17TA", "ST011D18TA", "ST011D19TA", "ST012Q03TA")
+for(var in items_CS){
+  data_homepos_long$item_id[data_homepos_long$item_id == var] <- paste(
+                                                    data_homepos_long$item[data_homepos_long$item_id == var], 
+                                                    data_homepos_long$CNT[data_homepos_long$item_id == var], 
+                                                    sep = "_")
+}
+
+# give all the group specific variables an unique item_id per group 
+## this did not work (yet) to put into a function or loop ##
+
+# ST011Q01TA Saudi Arabia (Arabic, English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "SAU"])
+data_homepos_long$item_id[data_homepos_long$item == "ST011Q01TA" & data_homepos_long$CNT == "SAU"] <- paste(
+                                                    "ST011Q01TA", "SAU", sep = "_")
+
+# ST011Q05TA Japan (Japanese)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "JPN"])
+data_homepos_long$item_id[data_homepos_long$item == "ST011Q05TA" & data_homepos_long$CNT == "JPN"] <- paste(
+                                                    "ST011Q05TA", "JPN", sep = "_")
+
+# ST011Q09TA Japan (Japanese)
+data_homepos_long$item_id[data_homepos_long$item == "ST011Q09TA" & data_homepos_long$CNT == "JPN"] <- paste(
+                                                    "ST011Q09TA", "JPN", sep = "_")
+
+# ST011Q11TA Finland (Finnish)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "FIN"])
+data_homepos_long$item_id[data_homepos_long$item == "ST011Q11TA" & data_homepos_long$CNT == "FIN" & data_homepos_long$LANGTEST_QQQ == 420] <- paste("ST011Q11TA", "FIN", "Finnish", sep = "_")
+
+# ST011Q11TA Ireland (Irish, English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "IRL"])
+data_homepos_long$item_id[data_homepos_long$item == "ST011Q11TA" & data_homepos_long$CNT == "IRL"] <- paste(
+                                                    "ST011Q11TA", "IRL", sep = "_")
+
+# ST011Q12TA Qatar (Arabic)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "QAT"])
+data_homepos_long$item_id[data_homepos_long$item == "ST011Q12TA" & data_homepos_long$CNT == "QAT" & data_homepos_long$LANGTEST_QQQ == 500] <- paste("ST011Q12TA", "QAT", "Arabic", sep = "_")
+
+# ST011Q12TA Saudi Arabia (Arabic, English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "SAU"])
+data_homepos_long$item_id[data_homepos_long$item == "ST011Q12TA" & data_homepos_long$CNT == "SAU"] <- paste(
+                                                    "ST011Q12TA", "SAU", sep = "_")
+
+# ST011Q16NA Philippines (English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "PHL"])
+data_homepos_long$item_id[data_homepos_long$item == "ST011Q16NA" & data_homepos_long$CNT == "PHL"] <- paste(
+                                                    "ST011Q16NA", "PHL", sep = "_")
+
+# ST012Q01TA United Arab Emirates/Dubai (Arabic)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "ARE"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q01TA" & data_homepos_long$CNT == "ARE" & data_homepos_long$LANGTEST_QQQ == 500] <- paste("ST012Q01TA", "ARE", "Arabic", sep = "_")
+
+# ST012Q01TA Argentina (Spanish)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "ARG"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q01TA" & data_homepos_long$CNT == "ARG"] <- paste(
+                                                    "ST012Q01TA", "ARG", sep = "_")
+# ST012Q01TA Chile (Spanish)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "CHL"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q01TA" & data_homepos_long$CNT == "CHL"] <- paste(
+                                                    "ST012Q01TA", "CHL", sep = "_")
+
+# ST012Q01TA Hong Kong (China) (English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "HKG"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q01TA" & data_homepos_long$CNT == "HKG" & data_homepos_long$LANGTEST_QQQ == 313] <- paste("ST012Q01TA", "HKG", "English", sep = "_")
+
+# ST012Q01TA Hong Kong (China) (Chinese)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "HKG"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q01TA" & data_homepos_long$CNT == "HKG" & data_homepos_long$LANGTEST_QQQ == 316] <- paste("ST012Q01TA", "HKG", "Chinese", sep = "_")
+
+# ST012Q01TA Korea (Korean)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "KOR"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q01TA" & data_homepos_long$CNT == "KOR"] <- paste(
+                                                    "ST012Q01TA", "KOR", sep = "_")
+# ST012Q01TA Qatar (Arabic)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "QAT"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q01TA" & data_homepos_long$CNT == "QAT" & data_homepos_long$LANGTEST_QQQ == 500] <- paste("ST012Q01TA", "QAT", "Arabic", sep = "_")
+
+# ST012Q01TA United States (English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "USA"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q01TA" & data_homepos_long$CNT == "USA"] <- paste(
+                                                    "ST012Q01TA", "USA", sep = "_")
+
+# ST012Q02TA United Arab Emirates/Dubai (Arabic)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "ARE"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q02TA" & data_homepos_long$CNT == "ARE" & data_homepos_long$LANGTEST_QQQ == 500] <- paste("ST012Q02TA", "ARE", "Arabic", sep = "_")
+
+# ST012Q02TA Brunei Darussalam (English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "BRN"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q02TA" & data_homepos_long$CNT == "BRN"] <- paste(
+                                                    "ST012Q02TA", "BRN", sep = "_")
+# ST012Q02TA Hong Kong (China) (Chinese)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "HKG"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q02TA" & data_homepos_long$CNT == "HKG" & data_homepos_long$LANGTEST_QQQ == 316] <- paste("ST012Q02TA", "HKG", "Chinese", sep = "_")
+
+# ST012Q02TA Hong Kong (China) (English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "HKG"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q02TA" & data_homepos_long$CNT == "HKG" & data_homepos_long$LANGTEST_QQQ == 313] <- paste("ST012Q02TA", "HKG", "English", sep = "_")
+
+# ST012Q02TA Malaysia (English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "MYS"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q02TA" & data_homepos_long$CNT == "MYS" & data_homepos_long$LANGTEST_QQQ == 313] <- paste("ST012Q02TA", "MYS", "English", sep = "_")
+
+# ST012Q02TA Qatar (Arabic)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "QAT"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q02TA" & data_homepos_long$CNT == "QAT" & data_homepos_long$LANGTEST_QQQ == 500] <- paste("ST012Q02TA", "QAT", "Arabic", sep = "_")
+
+# ST012Q02TA Saudi Arabia (Arabic, English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "SAU"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q02TA" & data_homepos_long$CNT == "SAU"] <- paste(
+                                                    "ST012Q02TA", "SAU", sep = "_")
+
+# ST012Q02TA Singapore (English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "SGP"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q02TA" & data_homepos_long$CNT == "SGP"] <- paste(
+                                                    "ST012Q02TA", "SGP", sep = "_")
+
+# ST012Q02TA United States (English)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "USA"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q02TA" & data_homepos_long$CNT == "USA"] <- paste(
+                                                    "ST012Q02TA", "USA", sep = "_")
+
+# ST012Q02TA Viet Nam (Vietnamese)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "VNM"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q02TA" & data_homepos_long$CNT == "VNM"] <- paste(
+                                                    "ST012Q02TA", "VNM", sep = "_")
+
+# ST012Q05NA Kazakhstan (Kazakh)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "KAZ"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q05NA" & data_homepos_long$CNT == "KAZ" & data_homepos_long$LANGTEST_QQQ == 275] <- paste("ST012Q05NA", "KAZ", "Kazakh", sep = "_")
+
+# ST012Q05NA Republic of Moldova (Russian)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "MDA"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q05NA" & data_homepos_long$CNT == "MDA" & data_homepos_long$LANGTEST_QQQ == 495] <- paste("ST012Q05NA", "MDA", "Russian", sep = "_")
+
+# ST012Q06NA Denmark (Danish)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "DNK"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q06NA" & data_homepos_long$CNT == "DNK"] <- paste(
+                                                    "ST012Q06NA", "DNK", sep = "_")
+
+# ST012Q07NA United Arab Emirates/Dubai (Arabic)
+table(data_homepos_long$LANGTEST_QQQ[data_homepos_long$CNT == "ARE"])
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q07NA" & data_homepos_long$CNT == "ARE" & data_homepos_long$LANGTEST_QQQ == 500] <- paste("ST012Q07NA", "ARE", "Arabic", sep = "_")
+
+# ST012Q07NA Qatar (Arabic)
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q07NA" & data_homepos_long$CNT == "QAT" & data_homepos_long$LANGTEST_QQQ == 500] <- paste("ST012Q07NA", "QAT", "Arabic", sep = "_")
+
+# ST012Q07NA Qatar (English)
+data_homepos_long$item_id[data_homepos_long$item == "ST012Q07NA" & data_homepos_long$CNT == "QAT" & data_homepos_long$LANGTEST_QQQ == 313] <- paste("ST012Q07NA", "QAT", "English", sep = "_")
+```
+
+#### Perform 2PL with dexterMML
+
+To get the ability estimates, i.e., HOMEPOS, we perform a 2PL. We need to:
+- Make sure only the complete cases are used.
+- Calculate parameter estimates.
+- Calculate the ability estimates per student (= HOMEPOS). 
+
+```{r}
+# drop the items where a score is missing
+data_homepos_long_complete <- data_homepos_long %>% drop_na(item_score)
+
+# estimate the parameters
+parms <- dexterMML::fit_2pl(data_homepos_long_complete %>% dplyr::select(person_id, item_id, item_score))
+coef(parms)
+
+# calculate theta: the ability estimate
+theta <- ability.mml(data_homepos_long_complete, parms, method = "WLE")
+```
+
+#### Compare computed homepos with PISA homepos
+
+To know how well we recreated HOMEPOS, we compare the calculated HOMEPOS with the original PISA HOMEPOS. We do this by:
+- Looking at the correlation between calculated HOMEPOS and PISA HOMEPOS. 
+- Looking at a scatter plot between calculated HOMEPOS and PISA HOMEPOS. 
+
+```{r}
+# make a dataframe with original pisa data
+data_compare <- data.frame(person_id = data$CNTSTUID, HOMEPOS_PISA = data$HOMEPOS)
+
+# drop missings
+data_compare <- data_compare %>% drop_na()
+
+# add calculated homepos
+data_compare <- merge(data_compare, theta, by = "person_id")
+
+# compare
+summary(data_compare$HOMEPOS_PISA)
+summary(data_compare$theta)
+
+cor(data_compare$HOMEPOS_PISA, data_compare$theta)
+plot(data_compare$HOMEPOS_PISA, data_compare$theta)
+
+HOMEPOS_plot <- ggplot(data_compare, aes(x = HOMEPOS_PISA, y = theta)) + geom_point(alpha = 0.05) +
+  ggtitle("Comparing computed HOMEPOS to the PISA HOMEPOS") +
+  xlab("Computed HOMEPOS") + ylab("PISA HOMEPOS") 
+HOMEPOS_plot
+```
+
+#### Create dataset for recreating ESCS
+
+To recreate ESCS, we need more variables, so we create a new dataset with only the necessary variables. 
+
+```{r}
+# Change the column names so they make sense in the original data
+colnames(theta) <- c("CNTSTUID", "HOMEPOS_theta", "HOMEPOS_se")
+
+# add our created HOMEPOS to the data
+data <- merge(data, theta, by = "CNTSTUID", all.x = TRUE)
+
+# make data with only indicators
+data_ind2 <- data.frame(data$CNT, data$HISEI, data$PAREDINT, data$HOMEPOS_theta, data$CNTSTUID)
+data_ind2$data.CNT <- as.character(data_ind2$data.CNT)
+data_ind2$data.HISEI <- as.numeric(data_ind2$data.HISEI)
+data_ind2$data.PAREDINT <- as.numeric(data_ind2$data.PAREDINT)
+data_ind2$data.HOMEPOS <- as.numeric(data_ind2$data.HOMEPOS_theta)
+
+# add variable that indicates number of missings per row
+data_ind2 <- data_ind2 %>% mutate(n_NAs = rowSums(is.na(.)))
+```
+
+#### Imputation 
+
+To recreate ESCS, we first need to impute the values of the indicators. This is done using stochastic regression imputation per country and only if the student has a missing value on exactly one of the three indicators. 
+
+```{r}
+# make a list of countries
+country_list <- unique(data_ind2$data.CNT)
+
+# make a data frame to save the imputed data of the countries
+data_all <- data.frame()
+
+set.seed(679)
+
+# for each country
+for(country in country_list){
+
+data_ind <- data_ind2 %>% filter(data.CNT == country)
+
+# HOMEPOS
+model_home <- lm(data = data_ind, data.HOMEPOS ~ data.PAREDINT + data.HISEI)
+summary(model_home)
+
+data_im <- data_ind %>% mutate(homepos_im = case_when(
+  is.na(data.HOMEPOS) & n_NAs == 1 ~ model_home$coefficients[1] + model_home$coefficients[2]*data.PAREDINT + model_home$coefficients[3]*data.HISEI + rnorm(1, 0, summary(model_home)$sigma),
+  TRUE ~ data.HOMEPOS)) 
+
+# PAREDINT
+model_paredint <- lm(data = data_ind, data.PAREDINT ~ data.HOMEPOS + data.HISEI)
+summary(model_paredint)
+
+data_im <- data_im %>% mutate(paredint_im = case_when(
+  is.na(data.PAREDINT) & n_NAs == 1 ~ model_paredint$coefficients[1]
+ + model_paredint$coefficients[2]*data.HOMEPOS + model_paredint$coefficients[3]*data.HISEI + rnorm(1, 0, summary(model_paredint)$sigma),
+  TRUE ~ data.PAREDINT
+  )) 
+
+# HISEI
+model_hisei <- lm(data = data_ind, data.HISEI ~ data.PAREDINT + data.HOMEPOS)
+summary(model_hisei) 
+
+data_im <- data_im %>% mutate(hisei_im = case_when(
+  is.na(data.HISEI) & n_NAs == 1 ~ model_hisei$coefficients[1] + model_hisei$coefficients[2]*data.PAREDINT + model_hisei$coefficients[3]*data.HOMEPOS + rnorm(1, 0, summary(model_hisei)$sigma),
+  TRUE ~ data.HISEI
+  )) 
+
+data_all <- rbind(data_all, data_im)
+}
+```
+
+#### Scaling
+
+Before we use the indicators to create ESCS, we scale the indicators to have a mean of 0 and a SD of 1. 
+
+```{r}
+data_all$hisei_im <- scale(data_all$hisei_im)
+data_all$homepos_im <- scale(data_all$homepos_im)
+data_all$paredint_im <- scale(data_all$paredint_im)
+```
+
+#### Creating ESCS and comparing to PISA's ESCS
+
+We recreate ESCS by taking the mean of the three imputed and scaled indicators. To know how well we recreated ESCS, we compare the calculated ESCS with the original PISA ESCS. We do this by:
+- Looking at the correlation between calculated ESCS and PISA ESCS 
+- Looking at a scatter plot between calculated ESCS and PISA ESCS 
+
+```{r}
+# add ESCS to dataframe
+data_all$ESCS <- apply(cbind(data_all$homepos_im, data_all$paredint_im, data_all$hisei_im), 1, mean, na.rm = FALSE)
+
+# compare created ESCS to the ESCS in the PISA data 
+data_all$ESCS_PISA <- data$ESCS
+summary(data_all$ESCS)
+summary(data_all$ESCS_PISA)
+
+cor(data_all$ESCS,data_all$ESCS_PISA, use = "complete")
+
+# create a plot
+ESCS_plot <- ggplot(data_all, aes(x = ESCS_PISA, y = ESCS)) + geom_point(alpha = 0.05) +
+  ggtitle("Comparing computed ESCS to the PISA ESCS") +
+  xlab("Computed ESCS") + ylab("PISA ESCS") 
+ESCS_plot
+```
+
+The correlation between PISA's ESCS and our ESCS is 0.9913. 
