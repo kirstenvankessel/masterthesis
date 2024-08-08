@@ -24,7 +24,7 @@ library(dexterMML)
 library(ggcorrplot)
 
 # load data
-data <- read_sav("CY07_MSU_STU_QQQ.sav")
+data <- read_sav("../data/CY07_MSU_STU_QQQ.sav")
 head(data)
 
 # set seed

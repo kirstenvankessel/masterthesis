@@ -16,7 +16,7 @@ library(ggplot2)
 library(countrycode)
 
 # load data
-data <- read_sav("CY07_MSU_STU_QQQ.sav") # original data
+data <- read_sav("../data/CY07_MSU_STU_QQQ.sav") # original data
 
 # select subset variables
 data <- data %>% select(CNT, CNTSTUID, LANGTEST_QQQ, ST011Q01TA:ST011Q16NA, ST011D17TA:ST011D19TA, ST012Q01TA:ST012Q09NA, ST013Q01TA, HOMEPOS, HISEI, PAREDINT, ESCS)
