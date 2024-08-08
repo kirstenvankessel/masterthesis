@@ -1,0 +1,323 @@
+---
+title: "Research Question 1: Is there measurement invariance?"
+author: "Kirsten van Kessel"
+date: "2024-01-16"
+output: html_document
+---
+
+#### Setup
+
+```{r, warning=FALSE, message=FALSE}
+# load libraries
+library(haven)
+library(lavaan)
+library(dplyr)
+library(ggplot2)
+library(countrycode)
+
+# load data
+data <- read_sav("CY07_MSU_STU_QQQ.sav") # original data
+
+# select subset variables
+data <- data %>% select(CNT, CNTSTUID, LANGTEST_QQQ, ST011Q01TA:ST011Q16NA, ST011D17TA:ST011D19TA, ST012Q01TA:ST012Q09NA, ST013Q01TA, HOMEPOS, HISEI, PAREDINT, ESCS)
+head(data)
+
+# set seed
+set.seed(679)
+```
+
+#### The configural and metric variance models: Method and evaluation
+
+We start with building the model, which is a model in which HISEI, PAREDINT and HOMEPOS are the three observed variables that are loading onto the latent variable ESCS. For the configural invariance model, we let the factor loadings and intercepts be freely estimated. Only the factor loading of HISEI is fixed to one for scaling. We notice that this results in a model with zero degrees of freedom. To fix this, we fix the factor loading of PAREDINT to be 1 in one country, resulting in 1 degree of freedom. This results in a model with Chi-Square = 10.160, df = 1, p-value = 0.001, AIC = 3999507, BIC = 4007582, TLI = 0.991, CFI = 1.000, RMSEA = 0.036. This indicates a good fitting model.  
+
+For the metric invariance model, we fix all factor loadings to be the same in every country. This results in a model with Chi-Square = 11878.74, df = 158, p-value = 0.000, AIC = 4011061, BIC = 4017373, TLI = 0.930, CFI = 0.954, RMSEA = 0.103. This indicates a bad fitting model. We see that the AIC, BIC and RMSEA are higher in the metric invariance model as in the configural invariance model. TLI and CFI are lower. This both indicates that the configural invariance model fits better. 
+
+To inspect if the metric invariance model is significantly worse than the scalar invariance model, we compare them to each other using an ANOVA (chi-square difference test). The ANOVA concludes the models are significantly different: Chi-Squared diff = 11869, df = 157, p-value < .001. The scalar invariance model is the best model, indicating the there is measurement invariance. We do not run the scalar invariance model. 
+
+Metric invariance is not achieved. We look at modification indices to inspect how we could change this model to improve the fit. We see that for every country, the model would improve if we free the loadings of HISEI (let the loadings differ from other countries) and if we would let the indicator have a covariance. HISEI is the indicator with a loading of 1 to identify the scale. We do not have the degrees of freedom to add the covariances. 
+
+#### The configural and metric variance models
+
+```{r, eval=T, echo=T}
+# scale variables
+data$HISEI <- scale(data$HISEI)
+data$HOMEPOS <- scale(data$HOMEPOS)
+data$PAREDINT <- scale(data$PAREDINT)
+
+# make model
+model <- '
+ESCS_c =~ HISEI + PAREDINT + HOMEPOS
+'
+
+# Configural invariance
+fit_conf <- lavaan::cfa(model = model, data = data, group = "CNT") 
+summary(fit_conf) # zero degrees of freedom 
+# The loading of HISEI is fixed to be one in all countries for scaling
+# To get 1 degree of freedom instead of 1, we fix the loading of PAREDINT to be 1,
+# but only in one country
+
+model_conf <- '
+ESCS_c =~ 1*HISEI + c(1,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA,NA)*PAREDINT + HOMEPOS
+'
+
+fit_conf2 <- lavaan::cfa(model = model_conf, data = data, group = "CNT") 
+summary(fit_conf2)
+fitMeasures(fit_conf2) # fit measures: how well does the model fit?
+modificationIndices(fit_conf2, sort = TRUE, minimum.value = 0) # mod indices: what can we change to improve fit?
+
+# Metric invariance
+fit_metric <- lavaan::cfa(model = model, data = data, group = "CNT", 
+                          group.equal = c("loadings")) 
+summary(fit_metric)
+fitMeasures(fit_metric) # fit measures: how well does the model fit?
+modificationIndices(fit_metric, sort = TRUE, minimum.value = 0) # mod indices: what can we change to improve fit?
+
+# Chi-square difference test
+lavaan::anova(fit_conf2, fit_metric) # Metric is significantly worse, we stop
+```
+
+#### Making graph of the intercepts (means) per country
+
+```{r}
+# extract intercepts
+country_list <- unique(data$CNT)
+nu <- matrix(0, nrow = 80, ncol = 3)
+
+for(i in 1:length(country_list)){
+  nu_CNT <- inspect(fit_conf2, what='std')[i][[1]]$nu
+  nu_CNT <- nu_CNT %>% as.matrix() %>% t()
+  nu[i,] <- nu_CNT
+}
+head(nu)
+
+# make dataframe
+nu <- as.data.frame(nu)
+colnames(nu) <- c("HISEI", "PAREDINT", "HOMEPOS") # change columnnames
+nu$COUNTRY <- country_list # make variable for country
+head(nu)
+
+# Change country codes into country names
+# KSV, QAZ, QCI, QMR, QRT, and TAP do not work with the function, so are coded seperately
+nu$COUNTRY[nu$COUNTRY == "KSV"] <- "Kosovo"
+nu$COUNTRY[nu$COUNTRY == "QAZ"] <- "Baku"
+nu$COUNTRY[nu$COUNTRY == "QCI"] <- "B-S-J-Z"
+nu$COUNTRY[nu$COUNTRY == "QMR"] <- "Moscow Region"
+nu$COUNTRY[nu$COUNTRY == "QRT"] <- "Tatarstan"
+nu$COUNTRY[nu$COUNTRY == "TAP"] <- "Chinese Taipei"
+nu$COUNTRY[nu$COUNTRY != "Kosovo" & nu$COUNTRY != "Baku" 
+          & nu$COUNTRY != "B-S-J-Z" & nu$COUNTRY != "Moscow Region"
+          & nu$COUNTRY != "Tatarstan" & nu$COUNTRY != "Chinese Taipei"] <- 
+  countrycode(nu$COUNTRY[nu$COUNTRY != "Kosovo" & nu$COUNTRY != "Baku" 
+              & nu$COUNTRY != "B-S-J-Z" & nu$COUNTRY != "Moscow Region"
+              & nu$COUNTRY != "Tatarstan" & nu$COUNTRY != "Chinese Taipei"],
+  "iso3c", "country.name")
+
+# make a plot for the intercepts of HISEI
+nu_HISEI_plot <- ggplot(nu, aes(x=HISEI, y=reorder(COUNTRY, HISEI))) + geom_point() +
+  ggtitle("The intercepts of HISEI per country") +
+  ylab("Country") +
+  xlab("Intercept HISEI")
+nu_HISEI_plot
+
+# make a plot for the intercepts of PAREDINT
+nu_PAREDINT_plot <- ggplot(nu, aes(x=PAREDINT, y=reorder(COUNTRY, PAREDINT))) + geom_point() +
+  ggtitle("The intercepts of PAREDINT per country") +
+  ylab("Country") +
+  xlab("Intercept PAREDINT")
+nu_PAREDINT_plot
+
+# make a plot for the intercepts of HOMEPOS
+nu_HOMEPOS_plot <- ggplot(nu, aes(x=HOMEPOS, y=reorder(COUNTRY, HOMEPOS))) + geom_point() +
+  ggtitle("The intercepts of HOMEPOS per country") +
+  ylab("Country") +
+  xlab("Intercept HOMEPOS")
+nu_HOMEPOS_plot
+
+# when saving: height = 1000
+```
+
+#### Making graph of the factor loadings per country
+
+```{r}
+# extract intercepts
+country_list <- unique(data$CNT)
+lambda <- matrix(0, nrow = 80, ncol = 3)
+
+for(i in 1:length(country_list)){
+  lambda_CNT <- inspect(fit_conf2, what='std')[i][[1]]$lambda
+  lambda_CNT <- lambda_CNT %>% as.matrix() %>% t()
+  lambda[i,] <- lambda_CNT
+}
+head(lambda)
+
+# make dataframe
+lambda <- as.data.frame(nu)
+colnames(lambda) <- c("HISEI", "PAREDINT", "HOMEPOS") # change columnnames
+lambda$COUNTRY <- nu$COUNTRY # make variable for country
+head(lambda)
+
+# make a plot for the loadings of HISEI
+lambda_HISEI_plot <- ggplot(lambda, aes(x=HISEI, y=reorder(COUNTRY, HISEI))) + geom_point() +
+  ggtitle("The factor loadings of HISEI per country") +
+  ylab("Country") +
+  xlab("Factor loading HISEI")
+lambda_HISEI_plot
+
+# make a plot for the loadings of PAREDINT
+lambda_PAREDINT_plot <- ggplot(lambda, aes(x=PAREDINT, y=reorder(COUNTRY, PAREDINT))) + geom_point() +
+  ggtitle("The factor loadings of PAREDINT per country") +
+  ylab("Country") +
+  xlab("Factor loading PAREDINT")
+lambda_PAREDINT_plot
+
+# make a plot for the loadings of HOMEPOS
+lambda_HOMEPOS_plot <- ggplot(lambda, aes(x=HOMEPOS, y=reorder(COUNTRY, HOMEPOS))) + geom_point() +
+  ggtitle("The factor loadings of HOMEPOS per country") +
+  ylab("Country") +
+  xlab("Factor loading HOMEPOS")
+lambda_HOMEPOS_plot
+
+# when saving: height = 1000
+```
+
+#### Improving the metric invariance model 
+
+We try to follow the modification indices to achieve partial invariance. This is reached when the model does not significantly differ from the configural invariance model. 
+
+1. PAREDINT	~~	HOMEPOS free in group 31
+2. PAREDINT	~~	HOMEPOS free in group 46
+3. PAREDINT	~~	HOMEPOS free in group 75
+4. HISEI	~~	PAREDINT free in group 57
+5. ESCS_c	=~	HISEI free in group 56
+6. ESCS_c	=~	HISEI free in group 48
+7. ESCS_c	=~	HISEI free in group 57
+8. HISEI	~~	HOMEPOS free in group 68
+9. ESCS_c	=~	HISEI free in group 10
+10. PAREDINT	~~	HOMEPOS free in group 15
+11. HISEI	~~	HOMEPOS free in group 63
+12. HISEI	~~	HOMEPOS free in group 68
+13. HISEI	~~	HOMEPOS free in group 60
+14. HISEI	~~	HOMEPOS free in group 57
+15. ESCS_c	=~	HISEI free in group 16
+16. HISEI	~~	HOMEPOS free in group 12
+17. HISEI	~~	PAREDINT free in group 58
+18. ESCS_c	=~	HISEI free in group 80
+19. HISEI	~~	HOMEPOS free in group 21
+20. HISEI	~~	HOMEPOS free in group 3
+21. PAREDINT	~~	HOMEPOS free in group 61
+22. HISEI	~~	HOMEPOS free in group 65
+23. PAREDINT	~~	HOMEPOS free in group 41
+24. ESCS_c	=~	HISEI free in group 76
+25. PAREDINT	~~	HOMEPOS free in group 58
+26. PAREDINT	~~	HOMEPOS free in group 36
+27. ESCS_c	=~	HISEI free in group 60
+28. HISEI	~~	PAREDINT free in group 60
+29. ESCS_c	=~	HISEI free in group 78
+30. PAREDINT	~~	HOMEPOS free in group 45
+31. HISEI	~~	PAREDINT free in group 52
+32. HISEI	~~	PAREDINT free in group 11
+33. HISEI	~~	HOMEPOS free in group 67
+34. ESCS_c	=~	HISEI free in group 69
+35. HISEI	~~	PAREDINT free in group 1
+36. ESCS_c	=~	HISEI free in group 2
+37. HISEI	~~	PAREDINT free in group 3
+38. ESCS_c	=~	HISEI free in group 3
+39. HISEI	~~	PAREDINT free in group 25
+40. HISEI	~~	PAREDINT free in group 59
+41. HISEI	~~	HOMEPOS free in group 19
+42. HISEI	~~	PAREDINT free in group 50
+43. HISEI	~~	PAREDINT free in group 72
+44. PAREDINT	~~	HOMEPOS free in group 23
+45. HISEI	~~	PAREDINT free in group 35
+46. ESCS_c	=~	HISEI free in group 29
+47. PAREDINT	~~	HOMEPOS free in group 9
+48. PAREDINT	~~	HOMEPOS free in group 42
+49. PAREDINT	~~	HOMEPOS free in group 63
+50. PAREDINT	~~	HOMEPOS free in group 20
+51. ESCS_c	=~	HISEI free in group 28
+52. HISEI	~~	HOMEPOS free in group 18
+53. HISEI	~~	HOMEPOS free in group 43
+54. HISEI	~~	PAREDINT free in group 45
+55. HISEI	~~	PAREDINT free in group 70
+56. HISEI	~~	PAREDINT free in group 16
+57. HISEI	~~	HOMEPOS free in group 4
+58. HISEI	~~	PAREDINT free in group 2
+59. PAREDINT	~~	HOMEPOS free in group 14
+60. PAREDINT	~~	HOMEPOS free in group 74
+61. ESCS_c	=~	HISEI free in group 79
+62. HISEI	~~	HOMEPOS free in group 61
+63. HISEI	~~	PAREDINT free in group 13
+64. HISEI	~~	PAREDINT	 free in group 26
+65. HISEI	~~	PAREDINT free in group 66
+66. PAREDINT	~~	HOMEPOS free in group 1
+67. ESCS_c	=~	HISEI free in group 7
+68. HISEI	~~	PAREDINT free in group 8
+69. HISEI	~~	HOMEPOS free in group 10
+70. HISEI	~~	PAREDINT	 free in group 76
+71. HISEI	~~	PAREDINT free in group 44
+72. HISEI	~~	PAREDINT free in group 39
+73. HISEI	~~	HOMEPOS free in group 64
+74. ESCS_c	=~	HISEI free in group 40
+75. PAREDINT	~~	HOMEPOS free in group 50
+76. HISEI	~~	HOMEPOS	free in group 55
+77. HISEI	~~	HOMEPOS free in group 17
+78. PAREDINT	~~	HOMEPOS free in group 43
+79. HISEI	~~	PAREDINT free in group 24
+80. PAREDINT	~~	HOMEPOS free in group 62
+81. ESCS_c	=~	HISEI free in group 63
+82. HISEI	~~	PAREDINT free in group 78
+83. HISEI	~~	PAREDINT free in group 18
+84. ESCS_c	=~	HISEI free in group 18
+85. HISEI	~~	HOMEPOS free in group 34
+86. HISEI	~~	HOMEPOS free in group 38
+87. HISEI	~~	PAREDINT free in group 31
+88. ESCS_c	=~	HISEI free in group 31
+89. HISEI	~~	HOMEPOS free in group 15
+90. HISEI	~~	PAREDINT free in group 47
+91. HISEI	~~	HOMEPOS	free in group 36	
+92. HISEI	~~	HOMEPOS free in group 14
+93. HISEI	~~	HOMEPOS free in group 79
+94. PAREDINT	~~	HOMEPOS	free in group 37
+95. HISEI	~~	PAREDINT	free in group 51
+96. PAREDINT	~~	HOMEPOS free in group 12
+97. HISEI	~~	PAREDINT free in group 30
+98. ESCS_c	=~	HISEI free in group 58
+99. HISEI	~~	HOMEPOS free in group 33
+100. ESCS_c	=~	HISEI free in group 67
+101. ESCS_c	=~	HISEI free in group 70
+102. HISEI	~~	HOMEPOS free in group 6
+103. HISEI	~~	HOMEPOS	free in group 72
+104. HISEI	~~	PAREDINT	free in group 74	
+105. HISEI	~~	HOMEPOS	free in group 20
+106. HISEI	~~	HOMEPOS	free in group 39
+107. HISEI	~~	PAREDINT free in group 5
+108. PAREDINT	~~	HOMEPOS	free in group 13
+109. HISEI	~~	PAREDINT	free in group 37
+110. ESCS_c	=~	HISEI free in group 25
+111. HISEI	~~	HOMEPOS	free in group 69	
+112. HISEI	~~	HOMEPOS	free in group 75 
+  -> Model fits not significantly worse than the configural invariance model.
+     We have achieved partial metric invariance.  
+
+
+```{r}
+model <- '
+ESCS_c =~ c(1,NA,NA,1,1,1,NA,1,1,NA,1,1,1,1,1,NA,1,NA,1,1,1,1,1,1,NA,1,1,NA,NA,1,NA,1,1,1,1,1,1,1,1,NA,1,1,1,1,1,1,1,NA,1,1,1,1,1,1,1,NA,NA,NA,1,NA,1,1,NA,1,1,1,NA,1,NA,NA,1,1,1,1,1,NA,1,NA,NA,NA) *HISEI + PAREDINT + HOMEPOS
+            
+PAREDINT	~~ c(NA,0,0,0,0,0,0,0,NA,0,0,NA,NA,NA,NA,0,0,0,0,NA,0,0,NA,0,0,0,0,0,0,0,NA,0,0,0,0,NA,NA,0,0,0,NA,NA,NA,0,NA,NA,0,0,0,NA,0,0,0,0,0,0,0,NA,0,0,NA,NA,NA,0,NA,0,0,NA,0,0,0,0,0,NA,NA,0,0,0,0,0) *HOMEPOS
+
+HISEI	~~ c(NA,NA,NA,0,NA,0,0,NA,0,0,NA,0,NA,0,0,NA,0,NA,0,0,0,0,0,NA,NA,NA,0,0,0,NA,NA,0,0,0,NA,0,NA,0,NA,0,0,0,0,NA,NA,0,NA,0,0,NA,NA,NA,0,0,0,0,NA,NA,NA,NA,0,0,0,0,0,NA,0,0,0,NA,0,NA,0,NA,0,NA,0,NA,0,0) *PAREDINT
+              
+HISEI	~~ c(0,0,NA,NA,0,NA,0,0,0,NA,0,NA,0,NA,NA,0,NA,NA,NA,NA,NA,0,0,0,0,0,0,0,0,0,0,0,NA,NA,0,NA,0,NA,NA,0,0,0,NA,0,0,0,0,0,0,0,0,0,0,0,NA,0,NA,0,0,NA,NA,0,NA,NA,NA,0,NA,NA,NA,0,0,NA,0,0,NA,0,0,0,NA,0) *HOMEPOS
+
+'
+
+fit_partial <- lavaan::cfa(model = model, data = data, group = "CNT", 
+                          group.equal = c("loadings"),
+                          group.partial = c("ESCS_c =~ HISEI")) 
+lavaan::anova(fit_conf2, fit_partial) # model fits NOT significantly worse
+modificationIndices(fit_partial, sort = TRUE, minimum.value = 4)
+```
+
+
+

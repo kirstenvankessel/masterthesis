@@ -1,0 +1,206 @@
+---
+title: "Research Question 2: How can we improve measurement invariance?"
+author: "Kirsten van Kessel"
+date: "2024-01-16"
+output: html_document
+---
+
+#### Setup
+
+We load the original PISA 2018 data, because we want to test if the measurement model used in PISA 2018 is measurement invariant. 
+
+```{r, warning=FALSE, message=FALSE}
+# load libraries
+library(haven)
+library(sirt)
+library(lavaan)
+library(dplyr)
+library(countrycode)
+library(ggplot2)
+
+# load data
+data <- read_sav("CY07_MSU_STU_QQQ.sav")
+
+# select subset variables
+data <- data %>% select(CNT, CNTSTUID, LANGTEST_QQQ, ST011Q01TA:ST011Q16NA, ST011D17TA:ST011D19TA, ST012Q01TA:ST012Q09NA, ST013Q01TA, HOMEPOS, HISEI, PAREDINT, ESCS)
+head(data)
+
+# set seed
+set.seed(679)
+
+# scale variables
+data$HISEI <- scale(data$HISEI)
+data$HOMEPOS <- scale(data$HOMEPOS)
+data$PAREDINT <- scale(data$PAREDINT)
+```
+
+#### Alignment optimization
+
+First, we fit the configural invariance model, in which the intercepts and factor loadings are allowed to differ between countries. We create lambda (a matrix that includes item loadings on all three indicator for all countries) and nu (a matrix that includes item intercepts on all three indicator for all countries). We then run the invariance.alignment function from the sirt package to conduct the alignment optimization. 
+
+Alignment optimization makes it that we do not need equal loadings and intercept across countries to make an accurate estimation of the country means. Therefore, we can now compare the mean ESCS across countries. 
+
+After the alignment, we evaluate the model by inspecting the R-Squared: The effect size of approximate invariance. R-Squared is a measure on a scale from 0 to 1. The closer to 1 the R-Squared is, the more invariant the parameter is. However, exact guidelines are not established (according to Luong & Flake, 2021). R-Squared is 0.9589628 for the loadings, meaning that the factor loadings are close to completely invariant between countries after alignment. The R-Squared is 0.40387177 for the intercepts, meaning that the intercepts are not close to completely invariant after alignment. This is a model flaw.  
+
+How can we get an estimate of ESCS for every individual (instead of only on country level)?
+
+```{r}
+# the model
+model <- '
+ESCS_c =~ HISEI + PAREDINT + HOMEPOS
+ESCS_c ~~ 1*ESCS_c # fix factor variance to 1
+'
+
+fit <- lavaan::cfa(model = model, data = data, group = "CNT")
+summary(fit)
+# model with factor mean = 0 and factor variance = 1
+
+# create lambda
+country_list <- unique(data$CNT)
+
+lambda <- matrix(0, nrow = 80, ncol = 3)
+for(i in 1:length(country_list)){
+  lambda_CNT <- inspect(fit, what='std')[i][[1]]$lambda
+  lambda_CNT <- lambda_CNT %>% as.matrix() %>% t()
+  lambda[i,] <- lambda_CNT
+}
+head(lambda)
+
+# create nu
+nu <- matrix(0, nrow = 80, ncol = 3)
+for(i in 1:length(country_list)){
+  nu_CNT <- inspect(fit, what='std')[i][[1]]$nu
+  nu_CNT <- nu_CNT %>% as.matrix() %>% t()
+  nu[i,] <- nu_CNT
+}
+head(nu)
+
+# alignment optimization
+model_align <- sirt::invariance.alignment(lambda, nu)
+summary(model_align)
+
+# Effect sizes of approximate invariance
+model_align$es.invariance 
+# R-squared loadings = 0.9589628 -> invariant
+# R-squared intercepts = 0.40387177 -> not invariant
+
+# Aligned distribution parameters
+model_align$pars
+# Alpha = aligned means -> mean ESCS per country
+# Psi = aligned standard deviations
+
+# Aligned item parameters for all groups
+model_align$itempars.aligned
+# Summary of lambda (loadings) and nu (intercepts)
+```
+
+#### Make a plot of the means per country (with SDs)
+
+```{r}
+# make dataframe of parameter values
+parameters <- as.data.frame(model_align$pars)
+colnames(parameters) <- c("mean", "SD")
+parameters$country <- country_list
+
+# change codes into country names
+parameters$country[parameters$country == "KSV"] <- "Kosovo"
+parameters$country[parameters$country == "QAZ"] <- "Baku"
+parameters$country[parameters$country == "QCI"] <- "B-S-J-Z"
+parameters$country[parameters$country == "QMR"] <- "Moscow Region"
+parameters$country[parameters$country == "QRT"] <- "Tatarstan"
+parameters$country[parameters$country == "TAP"] <- "Chinese Taipei"
+parameters$country[parameters$country != "Kosovo" & parameters$country != "Baku" 
+          & parameters$country != "B-S-J-Z" & parameters$country != "Moscow Region"
+          & parameters$country != "Tatarstan" & parameters$country != "Chinese Taipei"] <- 
+  countrycode(parameters$country
+              [parameters$country != "Kosovo" & parameters$country != "Baku" 
+              & parameters$country != "B-S-J-Z" & parameters$country != "Moscow Region"
+              & parameters$country != "Tatarstan" & parameters$country != "Chinese Taipei"],
+  "iso3c", "country.name")
+
+align_ESCS_mean_plot <- 
+  ggplot(parameters, aes(x=mean, y=reorder(country,mean), xmin = mean-SD, xmax = mean+SD)) + 
+  geom_point() +
+  ggtitle("The means of ESCS per country") +
+  geom_errorbarh() +
+  ylab("Country") +
+  xlab("Mean ESCS")
+align_ESCS_mean_plot
+```
+
+#### Make plots of the aligned intercepts per country
+
+```{r}
+# make a dataframe
+intercepts <- model_align$nu.aligned
+intercepts <- as.data.frame(intercepts)
+colnames(intercepts) <- c("HISEI","PAREDINT","HOMEPOS")
+intercepts$COUNTRY <- parameters$country
+
+# make a plot for the intercepts of HISEI
+aligned_nu_HISEI_plot <- ggplot(intercepts, aes(x=HISEI, y=reorder(COUNTRY, HISEI))) + 
+  geom_point() +
+  ggtitle("The aligned intercepts of HISEI per country") +
+  ylab("Country") +
+  xlab("Aligned intercept HISEI")
+aligned_nu_HISEI_plot
+
+# make a plot for the intercepts of PAREDINT
+aligned_nu_PAREDINT_plot <- ggplot(intercepts, aes(x=PAREDINT, y=reorder(COUNTRY, PAREDINT))) +
+  geom_point() +
+  ggtitle("The aligned intercepts of PAREDINT per country") +
+  ylab("Country") +
+  xlab("Aligned intercept PAREDINT")
+aligned_nu_PAREDINT_plot
+
+# make a plot for the intercepts of HOMEPOS
+aligned_nu_HOMEPOS_plot <- ggplot(intercepts, aes(x=HOMEPOS, y=reorder(COUNTRY, HOMEPOS))) + 
+  geom_point() +
+  ggtitle("The aligned intercepts of HOMEPOS per country") +
+  ylab("Country") +
+  xlab("Aligned intercept HOMEPOS")
+aligned_nu_HOMEPOS_plot
+```
+
+
+#### Make plots of the aligned factor loadings per country
+
+```{r}
+# make a dataframe
+loadings <- model_align$lambda.aligned
+loadings <- as.data.frame(loadings)
+colnames(loadings) <- c("HISEI","PAREDINT","HOMEPOS")
+loadings$COUNTRY <- parameters$country
+
+# make a plot for the loadings of HISEI
+aligned_lambda_HISEI_plot <- ggplot(loadings, aes(x=HISEI, y=reorder(COUNTRY, HISEI))) + 
+  geom_point() +
+  ggtitle("The aligned factor loadings of HISEI per country") +
+  ylab("Country") +
+  xlab("Aligned factor loading HISEI")
+aligned_lambda_HISEI_plot
+
+# make a plot for the loadings of PAREDINT
+aligned_lambda_PAREDINT_plot <- ggplot(loadings,aes(x=PAREDINT, y=reorder(COUNTRY, PAREDINT))) +
+  geom_point() +
+  ggtitle("The aligned factor loadings of PAREDINT per country") +
+  ylab("Country") +
+  xlab("Aligned factor loading PAREDINT")
+aligned_lambda_PAREDINT_plot
+
+# make a plot for the loadings of HOMEPOS
+aligned_lambda_HOMEPOS_plot <- ggplot(loadings, aes(x=HOMEPOS, y=reorder(COUNTRY, HOMEPOS))) + 
+  geom_point() +
+  ggtitle("The aligned factor loadings of HOMEPOS per country") +
+  ylab("Country") +
+  xlab("Aligned factor loading HOMEPOS")
+aligned_lambda_HOMEPOS_plot
+```
+
+#### Getting individual measures for ESCS
+
+Not possible with alignment optimization: This is only for comparing on group level. 
+
+
+
+

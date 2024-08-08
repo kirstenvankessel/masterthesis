@@ -1,0 +1,327 @@
+---
+title: 'Research Question 2: How can we improve the missing data imputation?'
+author: "Kirsten van Kessel"
+date: "2024-04-11"
+output: html_document
+---
+
+#### Setup 
+
+We read in the data, scale the indicators so the mean of all pupils is 0 (instead of over only the sample). We then select only the complete cases to work with. 
+
+```{r, warning=FALSE, message=FALSE, echo = TRUE, results = 'hide'}
+# load libraries
+library(haven)
+library(dplyr)
+library(mice)
+library(missMethods)
+library(ggplot2)
+
+# load data
+data <- read_sav("CY07_MSU_STU_QQQ.sav")
+
+# select subset variables
+data <- data %>% select(CNT, CNTSTUID, LANGTEST_QQQ, ST011Q01TA:ST011Q16NA, ST011D17TA:ST011D19TA, ST012Q01TA:ST012Q09NA, ST013Q01TA, HOMEPOS, HISEI, PAREDINT, ESCS)
+head(data)
+
+# set seed
+set.seed(679)
+
+# scale indicators
+data$HISEI <- scale(data$HISEI)
+data$HOMEPOS <- scale(data$HOMEPOS)
+data$PAREDINT <- scale(data$PAREDINT)
+
+# complete data
+data_complete <- data %>% 
+  select(CNT, CNTSTUID, HOMEPOS, HISEI, PAREDINT, ESCS) %>% # only select variables
+  filter(complete.cases(HOMEPOS, HISEI, PAREDINT)) # only rows without missing values
+head(data_complete)
+```
+
+#### Inspect missingness
+
+We inspect what percentage of the data is missing. 
+
+```{r}
+# make subset of indicators
+data_indicators <- data %>% select(HOMEPOS, HISEI, PAREDINT)
+
+# make a plot of the missingness
+md.pattern(data.frame(data$HOMEPOS, data$HISEI, data$PAREDINT, data$ESCS), 
+           rotate.names = TRUE)
+
+# missing all three variables
+10470 / 612004 * 100 # 1.71%
+
+# missing two variables
+(183+578+3149) / 612004 * 100 # 0.64%
+
+# missing one variable
+(33450+6259+169) / 612004 * 100 # 6.52%
+
+# complete
+557746 / 612004 * 100 # 91.13%
+
+# percentage missing values total
+sum(is.na(data_indicators)) / (nrow(data_indicators)*ncol(data_indicators)) * 100 # 4.31%
+```
+
+#### Function for MSE
+
+MSE is the mean squared error: a measure for how well predicted data matches the observed data. We use this to compare the 'known' ESCS with the ESCS computed after each imputation method. 
+
+```{r}
+mse <- function(obs, pred){
+  mse <- mean((obs - pred)^2)
+  return(mse)
+}
+```
+
+#### Method 1: Do not impute
+
+In this method, we do not impute missing values. First, a random sample of 50,000 pupils is made. Then, 4.31% of the indicator values is randomly deleted to create holes in the dataframe. This is because in the original data, 4.31% of values on the indicators is missing. Then, the mean is taken to compute ESCS. 
+
+Within this method there are two methods to take the mean of the indicators: original and full. 
+
+In the method we call 'original', the mean gets taken including the missing values. This means that when one value is missing, the mean also is missing. This is called 'original', because this is the way PISA takes the mean of the three indicators. 
+
+In the method we call 'full', the mean of the three indicators is taken, ignoring any missing values. So, if there is one missing value, the ESCS value is the mean of the two not missing values. If there are two missing values, the ESCS value is the same as the one not missing value. 
+
+To compute the MSE, we need a full column. Otherwise an error is given. Therefore, only complete cases are used. This leads to a lower MSE for the 'original' method, as less cases are used and the ones used are complete. 
+
+
+```{r}
+# set seed
+set.seed(679)
+
+# storage to save the mse
+mse_notimputed_full <- c(rep(0,10))
+mse_notimputed_orig <- c(rep(0,10))
+
+for(i in 1:10) {
+  # take a random sample of 4800 complete cases
+  data_sample <- data_complete[sample(nrow(data_complete), size = 50000),]
+  
+  # make 4.31% of indicator values missing
+  data_missing <- data_sample %>% select(HOMEPOS, HISEI, PAREDINT) %>% delete_MCAR(0.0431)
+  
+  # add country, ID and ESCS back to dataframe
+  data_missing <- data.frame(data_missing, CNT = data_sample$CNT, 
+                             CNTSTUID = data_sample$CNTSTUID, ESCS = data_sample$ESCS)
+  
+  # calculate ESCS
+ data_missing$ESCS_notimputed_full <- apply(cbind(data_missing$HOMEPOS, data_missing$PAREDINT,
+                                                  data_missing$HISEI), 1, mean, na.rm = TRUE)
+ 
+ data_missing$ESCS_notimputed_orig <- apply(cbind(data_missing$HOMEPOS, data_missing$PAREDINT,
+                                                  data_missing$HISEI), 1, mean, na.rm = FALSE)
+  
+  # compare calculated ESCS to true ESCS
+  mse_notimputed_full[i] <-
+    mse(data_missing$ESCS[complete.cases(data_missing$ESCS_notimputed_full)],
+      data_missing$ESCS_notimputed_full[complete.cases(data_missing$ESCS_notimputed_full)]) 
+
+  mse_notimputed_orig[i] <- 
+    mse(data_missing$ESCS[complete.cases(data_missing$ESCS_notimputed_orig)], 
+        data_missing$ESCS_notimputed_orig[complete.cases(data_missing$ESCS_notimputed_orig)])
+}
+
+# inspect mse of not imputed ESCS deleting missing values
+mse_notimputed_full 
+mean(mse_notimputed_full)
+sd(mse_notimputed_full)
+
+# inspect mse of not imputed ESCS not deleting missing values
+mse_notimputed_orig
+mean(mse_notimputed_orig)
+sd(mse_notimputed_orig)
+```
+
+#### Method 2: Stochastic regression imputation
+
+In this method, stochastic regression imputation is used exactly how PISA used it: When one indicator is missing, the value is imputed. When two or more indicators are missing, the value cannot be imputed. Again, a random sample of 50,000 pupils with 4.31 of values randomly missing is used. 
+
+Again, the two different methods for calculating the mean are used and compared. 
+
+```{r}
+# set seed
+set.seed(679)
+
+# storage to save the mse
+mse_stoch_full <- c(rep(0,10))
+mse_stoch_orig <- c(rep(0,10))
+
+for(i in 1:10) {
+  # take a random sample of 4800 complete cases
+  data_sample <- data_complete[sample(nrow(data_complete), size = 50000),]
+  
+  # make 4.31% of indicator values missing
+  data_missing <- data_sample %>% select(HOMEPOS, HISEI, PAREDINT) %>% delete_MCAR(0.0431)
+  
+  # add country, ID and ESCS back to dataframe
+  data_missing <- data.frame(data_missing, CNT = data_sample$CNT, 
+                             CNTSTUID = data_sample$CNTSTUID, ESCS = data_sample$ESCS)
+  
+  # impute missing values indicators
+  
+  # make a list of countries
+  country_list <- unique(data_missing$CNT)
+  
+  # empty data_all
+  data_all <- data.frame()
+
+  # for each country
+  for(country in country_list){
+
+  data_ind <- data_missing %>% filter(CNT == country)
+
+  # HOMEPOS
+  model_home <- lm(data = data_ind, HOMEPOS ~ PAREDINT + HISEI)
+  summary(model_home)
+
+  data_im <- data_ind %>% mutate(homepos_im = case_when(
+    is.na(HOMEPOS) ~ model_home$coefficients[1] + model_home$coefficients[2]*PAREDINT +
+    model_home$coefficients[3]*HISEI + rnorm(1, 0, summary(model_home)$sigma),
+    TRUE ~ HOMEPOS)) 
+
+  # PAREDINT
+  model_paredint <- lm(data = data_ind, PAREDINT ~ HOMEPOS + HISEI)
+  summary(model_paredint)
+
+  data_im <- data_im %>% mutate(paredint_im = case_when(
+    is.na(PAREDINT) ~ model_paredint$coefficients[1]
+    + model_paredint$coefficients[2]*HOMEPOS + model_paredint$coefficients[3]*HISEI + 
+    rnorm(1,0, summary(model_paredint)$sigma),
+    TRUE ~ PAREDINT)) 
+
+  # HISEI
+  model_hisei <- lm(data = data_ind, HISEI ~ PAREDINT + HOMEPOS)
+  summary(model_hisei) 
+
+  data_im <- data_im %>% mutate(hisei_im = case_when(
+    is.na(HISEI) ~ model_hisei$coefficients[1] + model_hisei$coefficients[2]*PAREDINT +
+    model_hisei$coefficients[3]*HOMEPOS + rnorm(1, 0, summary(model_hisei)$sigma),
+    TRUE ~ HISEI)) 
+
+  data_all <- rbind(data_all, data_im)
+  }
+  
+  # calculate ESCS with imputed values
+  data_missing$ESCS_stochimputed_full <- apply(cbind(data_all$homepos_im,
+    data_all$paredint_im, data_all$hisei_im), 1, mean, na.rm = TRUE)
+
+  data_missing$ESCS_stochimputed_original <- apply(cbind(data_all$homepos_im,
+    data_all$paredint_im, data_all$hisei_im), 1, mean, na.rm = FALSE)
+  
+  # calculate MSE full
+  mse_stoch_full[i] <- mse(data_missing$ESCS[complete.cases(
+    data_missing$ESCS_stochimputed_full)],
+    data_missing$ESCS_stochimputed_full[complete.cases(data_missing$ESCS_stochimputed_full)])
+
+  # calculate MSE original
+  mse_stoch_orig[i] <- mse(data_missing$ESCS[complete.cases(
+    data_missing$ESCS_stochimputed_original)],
+    data_missing$ESCS_stochimputed_original[complete.cases(
+    data_missing$ESCS_stochimputed_original)])
+}
+
+# inspect mse of stochastic regression imputed ESCS deleting missing values
+mse_stoch_full 
+mean(mse_stoch_full)
+sd(mse_stoch_full)
+
+# inspect mse of stochastic regression imputed ESCS not deleting missing values
+mse_stoch_orig
+mean(mse_stoch_orig)
+sd(mse_stoch_orig)
+```
+
+#### Method 3: Multiple imputation
+
+The last method used a simple multiple imputation method to impute the missing values.
+
+Again, a random sample of 50,000 pupils with 4.31 of values randomly missing is used. 
+
+```{r echo = TRUE, results = 'hide', warning=FALSE, message=FALSE}
+# set seed
+set.seed(679)
+
+# storage to save the mse
+mse_mice <- c(rep(0,10))
+
+for(i in 1:10) {
+  # take a random sample of 4800 complete cases
+  data_sample <- data_complete[sample(nrow(data_complete), size = 50000),]
+  
+  # make 4.31% of indicator values missing
+  data_missing <- data_sample %>% select(HOMEPOS, HISEI, PAREDINT) %>% delete_MCAR(0.0431)
+  
+  # add country, ID back to dataframe
+  data_missing <- data.frame(data_missing, CNT = data_sample$CNT, 
+                             CNTSTUID = data_sample$CNTSTUID, ESCS = data_sample$ESCS)
+  
+  # impute missing values indicators
+  imp <- mice(data_missing, maxit = 5, m = 5, method = "cart", seed = 679)
+  
+  # make completed dataset
+  completed <- complete(imp)
+
+  # calculate ESCS with imputed values
+  data_missing$ESCS_multimputed <- apply(cbind(completed$HOMEPOS, completed$PAREDINT,
+                                               completed$HISEI), 1, mean, na.rm = TRUE)
+
+  # calculate MSE
+  mse_mice[i] <- mse(data_missing$ESCS, data_missing$ESCS_multimputed) 
+}
+```
+
+```{r}
+# inspect mse of multiple imputed ESCS
+mse_mice
+mean(mse_mice)
+sd(mse_mice)
+```
+
+#### Compare MSE
+
+Make a table and figure to compare MSE between methods. 
+
+```{r}
+method <- c("Not imputed full", 
+            "Not imputed original", 
+            "Stochastic regression imputation full", 
+            "Stochastic regression imputation original", 
+            "Multiple imputation")
+
+mean <- c(mean(mse_notimputed_full), 
+          mean(mse_notimputed_orig),
+          mean(mse_stoch_full),
+          mean(mse_stoch_orig),
+          mean(mse_mice))
+
+sd <- c(sd(mse_notimputed_full), 
+        sd(mse_notimputed_orig),
+        sd(mse_stoch_full),
+        sd(mse_stoch_orig),
+        sd(mse_mice))
+
+MSE <- data.frame(method, mean, sd)
+
+ggplot(MSE, aes(x=mean, y=method)) +  
+  geom_point() + 
+  ggtitle("Comparing the MSE of imputation methods") +
+  xlab("MSE") +
+  ylab("Imputation method") +
+  geom_errorbar(aes(xmin=mean-sd, xmax=mean+sd), width=.2)
+```
+
+
+
+
+
+
+
+
+
+

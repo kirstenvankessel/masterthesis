@@ -1,0 +1,849 @@
+---
+title: 'Research question 3: If we use our own recommendations to compute ESCS, does
+  this change the relationship between ESCS and the cognitive variables?'
+author: "Kirsten van Kessel"
+date: "2024-06-17"
+output: html_document
+---
+
+### Research question 3
+
+In this document, we perform the analyses needed to investigate research question 3: If we use our own recommendations to compute ESCS, does this change the relationship between ESCS and the cognitive variables? We answer this question by first performing a regression with the original ESCS Then, we perform the analysis with a newly computed ESCS (ESCS_c). This ESCS is based on exploratory analysis on indicator level (multigroup CFA and imputation simulation). We also perform the analysis with another newly computed ESCS (ESCS_c_item). This ESCS is based on exploratory analysis on item level (IRT analysis).
+
+#### Setup
+
+We load the original data. 
+
+```{r, warning=FALSE, message=FALSE, echo = TRUE, results = 'hide'}
+# load libraries
+library(haven)
+library(dplyr)
+library(tidyr)
+library(mice)
+library(missMethods)
+library(ggplot2)
+library(countrycode)
+library(broom)
+library(lme4)
+library(dexterMML)
+library(ggcorrplot)
+library(lavaan)
+library(tidyverse)
+library(labelled)
+library(janitor)
+library(readxl)
+library(knitr)
+library(dexter)
+
+# load data
+data <- read_sav("CY07_MSU_STU_QQQ.sav")
+head(data)
+
+# set seed
+set.seed(679)
+
+# scale indicators
+data$HISEI <- as.numeric(scale(data$HISEI))
+data$HOMEPOS <- as.numeric(scale(data$HOMEPOS))
+data$PAREDINT <- as.numeric(scale(data$PAREDINT))
+```
+
+#### Create "original" MATH
+
+```{r}
+# use script PISA_2018_mathematics to create database
+
+# load database
+pisa18_m <- readRDS("pisa18_m.RDS")
+
+# select all plausible values of reading and the new ESCS
+data_read <- data %>% 
+  select(CNTSTUID, ESCS, starts_with("PV")) %>% 
+  select(CNTSTUID, ESCS, ends_with("READ"))
+
+# merge with cognitive data
+pisa18_m <- merge(pisa18_m, data_read, by = "CNTSTUID")
+
+# prepare for plausible_values()
+colnames(pisa18_m)[colnames(pisa18_m) == "ESCS.y"] <- "ESCS"
+colnames(pisa18_m)[colnames(pisa18_m) == "CNTSTUID"] <- "person_id"
+colnames(pisa18_m)[colnames(pisa18_m) == "BOOKID"] <- "booklet_id"
+pisa18_responses <- pisa18_m %>% 
+  select(person_id, item_id, item_score, booklet_id, ESCS, PV1READ) %>%
+  drop_na(item_score) %>%
+  unique()
+
+# compute plausible values
+PV_MATH <- dexter::plausible_values(pisa18_responses, covariates = c("ESCS", "PV1READ"), nPV = 10)
+```
+
+#### Regression original ESCS
+
+```{r}
+# create 10 SEM models
+model1 <- "
+PV1 ~ 1 + ESCS
+"
+
+model2 <- "
+PV2 ~ 1 + ESCS
+"
+
+model3 <- "
+PV3 ~ 1 + ESCS
+"
+
+model4 <- "
+PV4 ~ 1 + ESCS
+"
+
+model5 <- "
+PV5 ~ 1 + ESCS
+"
+
+model6 <- "
+PV6 ~ 1 + ESCS
+"
+
+model7 <- "
+PV7 ~ 1 + ESCS
+"
+
+model8 <- "
+PV8 ~ 1 + ESCS
+"
+
+model9 <- "
+PV9 ~ 1 + ESCS
+"
+
+model10 <- "
+PV10 ~ 1 + ESCS
+"
+
+models <- c(model1, model2, model3, model4, model5, model6, model7, model8, model9, model10)
+reg_coef <- c(rep(0,10))
+p_value <- c(rep(0,10))
+
+# fit SEM models
+for(model in models){
+  fit <- sem(model, data=PV_MATH)
+  B <- summary(fit)[[5]]$est[2] # regression coefficient
+  P <- summary(fit)[[5]]$pvalue[2] # pvalue
+  reg_coef[match(model,models)] <- B
+  p_value[match(model,models)] <- P
+}
+
+# mean regression coefficient
+mean(reg_coef) 
+
+# mean p-value 
+mean(p_value)
+```
+
+#### Create "PISAranking" (ranking we can compare other rankings to)
+
+```{r}
+# add CNT to PV_MATH
+data_CNT <- data %>% 
+  select(CNTSTUID, CNT) 
+colnames(data_CNT)[colnames(data_CNT) == "CNTSTUID"] <- "person_id"
+PV_MATH <- merge(PV_MATH, data_CNT, by = "person_id")
+
+# make the original PISA ranking
+MATH_mean <- PV_MATH %>% group_by(CNT) %>% 
+  summarize(mean1 = mean(PV1), mean2 = mean(PV2),
+            mean3 = mean(PV3), mean4 = mean(PV4),
+            mean5 = mean(PV5), mean6 = mean(PV6),
+            mean7 = mean(PV7), mean8 = mean(PV8),
+            mean9 = mean(PV9), mean10 = mean(PV10)) %>%
+  rowwise() %>%
+  mutate(mean_MATH = mean(c(mean1, mean2, mean3, mean4, mean5, 
+                            mean6, mean7, mean8, mean9, mean10))) %>% 
+  arrange(desc(mean_MATH))
+
+# add PISA ranking
+MATH_mean$PISAranking <- 1:nrow(MATH_mean)
+ranking_MATH_mean <- MATH_mean %>% select(CNT, PISAranking)
+
+# Change country codes into country names
+# KSV, QAZ, QCI, QMR, QRT, and TAP do not work with the function, so are coded seperately
+MATH_mean$CNT[MATH_mean$CNT == "KSV"] <- "Kosovo"
+MATH_mean$CNT[MATH_mean$CNT == "QAZ"] <- "Baku"
+MATH_mean$CNT[MATH_mean$CNT == "QCI"] <- "B-S-J-Z"
+MATH_mean$CNT[MATH_mean$CNT == "QMR"] <- "Moscow Region"
+MATH_mean$CNT[MATH_mean$CNT == "QRT"] <- "Tatarstan"
+MATH_mean$CNT[MATH_mean$CNT == "TAP"] <- "Chinese Taipei"
+MATH_mean$CNT[MATH_mean$CNT != "Kosovo" & MATH_mean$CNT != "Baku" 
+          & MATH_mean$CNT != "B-S-J-Z" & MATH_mean$CNT != "Moscow Region"
+          & MATH_mean$CNT != "Tatarstan" & MATH_mean$CNT != "Chinese Taipei"] <- 
+  countrycode(MATH_mean$CNT[MATH_mean$CNT != "Kosovo" & MATH_mean$CNT != "Baku" 
+              & MATH_mean$CNT != "B-S-J-Z" & MATH_mean$CNT != "Moscow Region"
+              & MATH_mean$CNT != "Tatarstan" & MATH_mean$CNT != "Chinese Taipei"],
+  "iso3c", "country.name")
+```
+
+
+#### Create new ESCS (indicator level)
+
+```{r}
+# imputation
+
+# select predictors
+data_missing <- data %>% select(HOMEPOS, HISEI, PAREDINT, CNT, CNTSTUID)
+
+# impute missing values indicators
+imp <- mice(data_missing, maxit = 5, m = 5, method = "cart", seed = 679)
+
+# make completed dataset
+completed <- complete(imp) 
+
+# add to the original dataset
+data$HISEI_n <- completed$HISEI
+data$HOMEPOS_n <- completed$HOMEPOS
+data$PAREDINT_n <- completed$PAREDINT
+
+# model for ESCS
+model <- '
+ESCS_c =~ c(1,NA,NA,1,1,1,NA,1,1,NA,1,1,1,1,1,NA,1,NA,1,1,1,1,1,1,NA,1,1,NA,NA,1,NA,1,1,1,1,1,1,1,1,NA,1,1,1,1,1,1,1,NA,1,1,1,1,1,1,1,NA,NA,NA,1,NA,1,1,NA,1,1,1,NA,1,NA,NA,1,1,1,1,1,NA,1,NA,NA,NA) *HISEI_n + PAREDINT_n + HOMEPOS_n
+            
+PAREDINT_n	~~ c(NA,0,0,0,0,0,0,0,NA,0,0,NA,NA,NA,NA,0,0,0,0,NA,0,0,NA,0,0,0,0,0,0,0,NA,0,0,0,0,NA,NA,0,0,0,NA,NA,NA,0,NA,NA,0,0,0,NA,0,0,0,0,0,0,0,NA,0,0,NA,NA,NA,0,NA,0,0,NA,0,0,0,0,0,NA,NA,0,0,0,0,0) *HOMEPOS_n
+
+HISEI_n	~~ c(NA,NA,NA,0,NA,0,0,NA,0,0,NA,0,NA,0,0,NA,0,NA,0,0,0,0,0,NA,NA,NA,0,0,0,NA,NA,0,0,0,NA,0,NA,0,NA,0,0,0,0,NA,NA,0,NA,0,0,NA,NA,NA,0,0,0,0,NA,NA,NA,NA,0,0,0,0,0,NA,0,0,0,NA,0,NA,0,NA,0,NA,0,NA,0,0) *PAREDINT_n
+              
+HISEI_n	~~ c(0,0,NA,NA,0,NA,0,0,0,NA,0,NA,0,NA,NA,0,NA,NA,NA,NA,NA,0,0,0,0,0,0,0,0,0,0,0,NA,NA,0,NA,0,NA,NA,0,0,0,NA,0,0,0,0,0,0,0,0,0,0,0,NA,0,NA,0,0,NA,NA,0,NA,NA,NA,0,NA,NA,NA,0,0,NA,0,0,NA,0,0,0,NA,0) *HOMEPOS_n
+
+'
+
+fit_partial <- lavaan::cfa(model = model, data = data, group = "CNT", 
+                          group.equal = c("loadings"),
+                          group.partial = c("ESCS_c =~ HISEI_n")) 
+summary(fit_partial)
+
+# get ESCS
+fscores <- lavPredict(fit_partial)
+data$ESCS_c <- array(unlist(fscores))
+```
+
+#### Create new MATH (indicator level)
+
+Code komt van Remco Feskens, zie document PISA_2018_mathematics. 
+
+```{r}
+# use script PISA_2018_mathematics to create database
+
+# load database
+pisa18_m <- readRDS("pisa18_m.RDS")
+
+# invest database
+head(pisa18_m)
+
+# select all plausible values of reading and the new ESCS
+data_read <- data %>% 
+  select(CNTSTUID, ESCS_c, starts_with("PV")) %>% 
+  select(CNTSTUID, ESCS_c, ends_with("READ"))
+
+# merge with cognitive data
+pisa18_m <- merge(pisa18_m, data_read, by = "CNTSTUID")
+
+# prepare for plausible_values()
+colnames(pisa18_m)[colnames(pisa18_m) == "CNTSTUID"] <- "person_id"
+colnames(pisa18_m)[colnames(pisa18_m) == "BOOKID"] <- "booklet_id"
+pisa18_responses <- pisa18_m %>% 
+  select(person_id, item_id, item_score, booklet_id, ESCS_c, PV1READ) %>%
+  drop_na(item_score) %>%
+  unique()
+
+# compute plausible values
+PV_MATH_c <- dexter::plausible_values(pisa18_responses, covariates = c("ESCS_c", "PV1READ"), nPV = 10)
+```
+
+
+#### Regression new ESCS (indicator level)
+
+```{r}
+# create 10 SEM models
+model1_c <- "
+PV1 ~ 1 + ESCS_c
+"
+
+model2_c <- "
+PV2 ~ 1 + ESCS_c
+"
+
+model3_c <- "
+PV3 ~ 1 + ESCS_c
+"
+
+model4_c <- "
+PV4 ~ 1 + ESCS_c
+"
+
+model5_c <- "
+PV5 ~ 1 + ESCS_c
+"
+
+model6_c <- "
+PV6 ~ 1 + ESCS_c
+"
+
+model7_c <- "
+PV7 ~ 1 + ESCS_c
+"
+
+model8_c <- "
+PV8 ~ 1 + ESCS_c
+"
+
+model9_c <- "
+PV9 ~ 1 + ESCS_c
+"
+
+model10_c <- "
+PV10 ~ 1 + ESCS_c
+"
+
+models_c <- c(model1_c, model2_c, model3_c, model4_c, model5_c, model6_c, model7_c,
+              model8_c, model9_c, model10_c)
+reg_coef_c <- c(rep(0,10))
+p_value_c <- c(rep(0,10))
+
+# fit SEM models
+for(model in models_c){
+  fit <- sem(model, data=PV_MATH_c)
+  B <- summary(fit)[[5]]$est[2] # regression coefficient
+  P <- summary(fit)[[5]]$pvalue[2] # pvalue
+  reg_coef_c[match(model,models_c)] <- B
+  p_value_c[match(model,models_c)] <- P
+}
+
+# mean regression coefficient
+mean(reg_coef_c) 
+
+# mean p-value 
+mean(p_value_c)
+```
+
+#### Ranking of countries on MATH using new ESCS (indicator level)
+
+19 countries have the same ranking as in the PISA ranking. 52 countries have a different ranking. 
+
+```{r}
+# add CNT to PV_MATH_IRT
+data_CNT <- data %>% 
+  select(CNTSTUID, CNT) 
+colnames(data_CNT)[colnames(data_CNT) == "CNTSTUID"] <- "person_id"
+PV_MATH_c <- merge(PV_MATH_c, data_CNT, by = "person_id")
+
+# take country mean
+PV_MATH_mean_c <- PV_MATH_c %>% group_by(CNT) %>% 
+  summarize(mean1 = mean(PV1), mean2 = mean(PV2),
+            mean3 = mean(PV3), mean4 = mean(PV4),
+            mean5 = mean(PV5), mean6 = mean(PV6),
+            mean7 = mean(PV7), mean8 = mean(PV8),
+            mean9 = mean(PV9), mean10 = mean(PV10),
+            sd1 = sd(PV1), sd2 = sd(PV2),
+            sd3 = sd(PV3), sd4 = sd(PV4),
+            sd5 = sd(PV5), sd6 = sd(PV6),
+            sd7 = sd(PV7), sd8 = sd(PV8),
+            sd9 = sd(PV9), sd10 = sd(PV10)) %>%
+  rowwise() %>%
+  mutate(mean_MATH_c = mean(c(mean1, mean2, mean3, mean4, mean5, 
+                                mean6, mean7, mean8, mean9, mean10))) %>%
+  mutate(sd_MATH_c = mean(c(sd1, sd2, sd3, sd4, sd5, 
+                              sd6, sd7, sd8, sd9, sd10)))
+
+# make the current ranking based on the new ESCS
+PV_MATH_mean_c <- PV_MATH_mean_c %>% arrange(desc(mean_MATH_c))
+PV_MATH_mean_c$ourranking <- 1:nrow(PV_MATH_mean_c)
+ranking_PV_MATH_mean_c <- PV_MATH_mean_c %>% select(CNT, ourranking)
+
+# merge the ranking together with the "original" PISA ranking
+rankings <- merge(ranking_MATH_mean, ranking_PV_MATH_mean_c, by = "CNT")
+
+# add green color if rankings match
+rankings <- rankings %>% mutate(color = ifelse(PISAranking == ourranking, 
+                                               "green", "black"))
+
+# merge colors with the data
+PV_MATH_mean_c <- merge(PV_MATH_mean_c, rankings, by = "CNT")
+
+# Change country codes into country names
+# KSV, QAZ, QCI, QMR, QRT, and TAP do not work with the function, so are coded seperately
+PV_MATH_mean_c$CNT[PV_MATH_mean_c$CNT == "KSV"] <- "Kosovo"
+PV_MATH_mean_c$CNT[PV_MATH_mean_c$CNT == "QAZ"] <- "Baku"
+PV_MATH_mean_c$CNT[PV_MATH_mean_c$CNT == "QCI"] <- "B-S-J-Z"
+PV_MATH_mean_c$CNT[PV_MATH_mean_c$CNT == "QMR"] <- "Moscow Region"
+PV_MATH_mean_c$CNT[PV_MATH_mean_c$CNT == "QRT"] <- "Tatarstan"
+PV_MATH_mean_c$CNT[PV_MATH_mean_c$CNT == "TAP"] <- "Chinese Taipei"
+PV_MATH_mean_c$CNT[PV_MATH_mean_c$CNT != "Kosovo" & PV_MATH_mean_c$CNT != "Baku" 
+          & PV_MATH_mean_c$CNT != "B-S-J-Z" & PV_MATH_mean_c$CNT != "Moscow Region"
+          & PV_MATH_mean_c$CNT != "Tatarstan" & PV_MATH_mean_c$CNT != "Chinese Taipei"] <- 
+  countrycode(PV_MATH_mean_c$CNT[PV_MATH_mean_c$CNT != "Kosovo" & PV_MATH_mean_c$CNT != "Baku" 
+              & PV_MATH_mean_c$CNT != "B-S-J-Z" & PV_MATH_mean_c$CNT != "Moscow Region"
+              & PV_MATH_mean_c$CNT != "Tatarstan" & PV_MATH_mean_c$CNT != "Chinese Taipei"],
+  "iso3c", "country.name")
+
+# make the plot
+ranking_plot_c <- ggplot(data = PV_MATH_mean_c, aes(x = mean_MATH_c, 
+                                y = reorder(CNT,mean_MATH_c), color = color)) +
+  scale_color_identity() +
+  geom_point() +
+  geom_errorbar(aes(xmin = mean_MATH_c - sd_MATH_c, 
+                    xmax = mean_MATH_c + sd_MATH_c)) +
+  xlab("Mean MATH ability") +
+  ylab("Country")
+ranking_plot_c
+```
+
+
+#### Create new ESCS (item level)
+
+##### Recode data
+
+Items should have 0 as their lowest value. Some items need to be recoded. 
+
+```{r}
+# select all items needed for the IRT 
+ESCS_items <- data %>% select(CNT,
+                              CNTSTUID,
+                              ST005Q01TA,  # highest level of schooling completed by mother
+                              ST006Q01TA:ST006Q04TA, # Does mother have this qualification?
+                              ST007Q01TA,  # highest level of schooling completed by father
+                              ST008Q01TA:ST008Q04TA, # Does father have this qualification?
+                              OCOD1, # ISCO-08 occupational code mother
+                              OCOD2, # ISCO-08 occupational code father
+                              ST011Q01TA:ST011Q16NA, # Do you have this in your home? 
+                              ST011D17TA:ST011D19TA, # Do you have this in your home? CNT
+                              ST012Q01TA:ST012Q09NA, # How many of this in your home?
+                              ST013Q01TA             # How many books in your home?
+                              ) %>% zap_labels()
+
+# select binary variables to recode
+data_binary <- ESCS_items %>% dplyr::select(ST006Q01TA:ST006Q04TA,
+                                            ST008Q01TA:ST008Q04TA,
+                                            ST011Q01TA:ST011Q16NA)
+
+# Recode binary variables
+ESCS_items <- ESCS_items %>% mutate_at(vars(all_of(colnames(data_binary))), list(~recode(., '1' = 1, '2' = 0)))
+
+# select ST011 country specific variables
+data_ST011_CS <- ESCS_items %>% dplyr::select(ST011D17TA:ST011D19TA)
+
+# Make ST011 country specific variables numeric
+ESCS_items[colnames(data_ST011_CS)] <- sapply(ESCS_items[colnames(data_ST011_CS)],as.numeric) 
+# make function to recode CS variables to 0, 1, NA
+recode_CS <- function(var){
+  var[var %% 2 == 0 & var < 9999996] <- 0
+  var[var %% 2 == 1 & var < 9999996] <- 1
+  var[var >= 9999997] <- NA
+  return(var)
+}
+
+# apply function
+ESCS_items[colnames(data_ST011_CS)] <- sapply(ESCS_items[colnames(data_ST011_CS)],recode_CS)
+
+# select ST012 and ST013
+data_rest <- ESCS_items %>% dplyr::select(ST012Q01TA:ST013Q01TA)
+
+# make sure they have a 0 value
+ESCS_items[colnames(data_rest)] <- ESCS_items[colnames(data_rest)] - 1
+
+# make function to recode ST005 and ST007
+recode_five <- function(var){
+  var[var == 5] <- 0
+  var[var == 4] <- 1
+  var[var == 3] <- 2
+  var[var == 2] <- 3
+  var[var == 1] <- 4
+  return(var)
+}
+
+# select ST005 and ST007
+data_five <- ESCS_items %>% dplyr::select(ST005Q01TA, ST007Q01TA)
+
+# apply function
+ESCS_items[colnames(data_five)] <- sapply(ESCS_items[colnames(data_five)],recode_five)
+
+# make OCO (occupation) variables into characters
+ESCS_items$OCOD1 <- as.character(ESCS_items$OCOD1)
+ESCS_items$OCOD2 <- as.character(ESCS_items$OCOD2)
+
+# recode OCO values into categories
+ESCS_items$OCOD1 <- ifelse(startsWith(ESCS_items$OCOD1, '0'), '0', 
+                      ifelse(startsWith(ESCS_items$OCOD1, '1'), '0',
+                      ifelse(startsWith(ESCS_items$OCOD1, '2'), '1',
+                      ifelse(startsWith(ESCS_items$OCOD1, '3'), '2',
+                      ifelse(startsWith(ESCS_items$OCOD1, '4'), '3',
+                      ifelse(startsWith(ESCS_items$OCOD1, '5'), '4',
+                      ifelse(startsWith(ESCS_items$OCOD1, '6'), '5',
+                      ifelse(startsWith(ESCS_items$OCOD1, '7'), '6',
+                      ifelse(startsWith(ESCS_items$OCOD1, '8'), '6',
+                      ifelse(startsWith(ESCS_items$OCOD1, '9'), '6',
+                             NA))))))))))
+
+ESCS_items$OCOD2 <- ifelse(startsWith(ESCS_items$OCOD2, '0'), '0', 
+                      ifelse(startsWith(ESCS_items$OCOD2, '1'), '0',
+                      ifelse(startsWith(ESCS_items$OCOD2, '2'), '1',
+                      ifelse(startsWith(ESCS_items$OCOD2, '3'), '2',
+                      ifelse(startsWith(ESCS_items$OCOD2, '4'), '3',
+                      ifelse(startsWith(ESCS_items$OCOD2, '5'), '4',
+                      ifelse(startsWith(ESCS_items$OCOD2, '6'), '5',
+                      ifelse(startsWith(ESCS_items$OCOD2, '7'), '6',
+                      ifelse(startsWith(ESCS_items$OCOD2, '8'), '6',
+                      ifelse(startsWith(ESCS_items$OCOD2, '9'), '6',
+                             NA))))))))))
+
+# code back to numeric
+ESCS_items$OCOD1 <- as.numeric(ESCS_items$OCOD1)
+ESCS_items$OCOD2 <- as.numeric(ESCS_items$OCOD2)
+
+```
+
+##### Create useful dataset
+
+```{r}
+# make long format dataset
+ESCS_items_long <- ESCS_items %>% pivot_longer(cols = ST005Q01TA:ST013Q01TA,
+                                               names_to = "item",
+                                                    values_to = "item_score")
+# create variable item_id
+ESCS_items_long$item_id <- ESCS_items_long$item
+
+# change name to person_id
+colnames(ESCS_items_long)[colnames(ESCS_items_long) == 'CNTSTUID'] <- 'person_id'
+
+# give some variables an unique item_id per country (CS = country specific)
+items_CS <- ESCS_items %>% 
+  select(ST006Q03TA, ST006Q04TA, ST007Q01TA, ST008Q03TA, ST008Q04TA, ST011D17TA, ST011D18TA, ST011D19TA, ST012Q01TA, ST012Q02TA) %>% 
+  colnames()
+
+for(var in items_CS){
+  ESCS_items_long$item_id[ESCS_items_long$item_id == var] <- paste(
+                                    ESCS_items_long$item[ESCS_items_long$item_id == var], 
+                                    ESCS_items_long$CNT[ESCS_items_long$item_id == var], 
+                                    sep = "_")
+}
+
+# drop the items where a score is missing
+ESCS_items_long_complete <- ESCS_items_long %>% drop_na(item_score)
+
+# select variables to put into IRT as responses
+responses <- ESCS_items_long_complete %>% dplyr::select(person_id, item_id, item_score)
+
+# remove items that either have only value 0 or do not have value 0
+`%notin%` <- Negate(`%in%`)
+baddies <- c("ST006Q03TA_POL", "ST008Q03TA_POL", "ST005Q01TA_CAN", "ST005Q01TA_JPN", "ST005Q01TA_POL", "ST007Q01TA_CAN", "ST007Q01TA_JPN","ST007Q01TA_POL")
+responses <- responses %>% 
+  filter(item_id %notin% baddies)
+
+# remove items with an alpha between -0.1 and 0.1
+baddies2 <- c("ST011Q08TA_PAN", "ST006Q04TA_KAZ", "ST008Q04TA_NZL", "ST011D17TA_SVN", "ST007Q01TA_KSV", "ST012Q01TA_FRA", "ST012Q01TA_LUX", "ST012Q01TA_SVN", "ST008Q04TA_QAZ", "ST012Q01TA_NZL", "ST006Q04TA_POL", "ST008Q04TA_QRT", "ST006Q04TA_RUS", "ST008Q04TA_DEU", "ST012Q01TA_AUS", "ST011D18TA_AUT", "ST012Q01TA_TAP", "ST012Q01TA_IRL", "ST008Q04TA_ROU", "ST008Q03TA_DNK", "ST012Q01TA_HUN", "ST006Q04TA_NZL", "ST006Q04TA_FIN", "ST006Q04TA_ROU", "ST008Q04TA_KAZ", "ST012Q01TA_GBR", "ST012Q01TA_DNK", "ST012Q01TA_BEL", "ST008Q03TA_JPN", "ST008Q04TA_QMR", "ST006Q03TA_UKR", "ST008Q04TA_RUS", "ST012Q01TA_ISL", "ST012Q01TA_MLT", "ST006Q04TA_DEU", "ST006Q04TA_QRT", "ST012Q01TA_NLD", "ST008Q03TA_UKR", "ST008Q04TA_ISL", "ST012Q01TA_ESP", "ST012Q01TA_SWE", "ST011D19TA_LUX", "ST012Q01TA_USA", "ST011Q08TA_PER", "OCOD2_r_ARE", "ST008Q04TA_POL", "OCOD2_r_QAT", "ST006Q04TA_QAZ", "ST012Q01TA_KOR", "ST012Q01TA_DEU", "ST012Q02TA_JPN", "ST012Q01TA_CAN", "ST008Q03TA_HRV", "ST012Q01TA_ITA", "ST008Q03TA_BLR", "ST012Q01TA_FIN", "ST012Q01TA_ISR", "ST012Q01TA_POL", "ST012Q01TA_AUT", "ST008Q04TA_NOR")
+responses <- responses %>% 
+  filter(item_id %notin% baddies2)
+```
+
+##### Run IRT
+
+```{r}
+# estimate the parameters
+parms_2PL <- dexterMML::fit_2pl(responses)
+coef <- coef(parms_2PL)
+```
+
+##### Plot beta values
+
+```{r}
+# split item_id into item and country (so we can plot per item)
+coef$item_id <- strsplit(coef$item_id, '_')
+coef$CNT <- sapply(coef$item_id, function(x) x[length(x)])
+coef$item_id <- sapply(coef$item_id, function(x) x[1])
+
+# make a variable for max score per item
+coef <- coef %>% group_by(item_id) %>% mutate(max_score=max(item_score))
+
+# keep only the betas of the items where the item score is the max score
+coef2 <- coef[coef$item_score == coef$max_score,]
+
+# plot betas
+beta_sd_plot <- ggplot(coef2, aes(x=beta, y=item_id)) + geom_point()
+beta_sd_plot
+```
+
+##### Get estimate for ESCS
+
+```{r}
+# estimate ESCS
+theta <- dexterMML::ability.mml(responses, parms_2PL, method = "WLE")
+
+# change name of person_id to CNTSTUID so we can match on it
+colnames(theta) <- c("CNTSTUID", "ESCS_IRT", "SE_ESCS_IRT")
+
+# add ESCS to the dataset
+data <- merge(data, theta, by = "CNTSTUID")
+
+# check if ESCS_IRT is in the data
+summary(data$ESCS_IRT)
+```
+
+
+#### Create new MATH (item level)
+
+```{r}
+# load database
+pisa18_m <- readRDS("pisa18_m.RDS")
+
+# invest database
+head(pisa18_m)
+
+# select all plausible values of reading and the new ESCS
+data_read <- data %>% 
+  select(CNTSTUID, ESCS_IRT, starts_with("PV")) %>% 
+  select(CNTSTUID, ESCS_IRT, ends_with("READ"))
+
+# merge with cognitive data
+pisa18_m <- merge(pisa18_m, data_read, by = "CNTSTUID")
+
+# prepare for plausible_values()
+colnames(pisa18_m)[colnames(pisa18_m) == "CNTSTUID"] <- "person_id"
+colnames(pisa18_m)[colnames(pisa18_m) == "BOOKID"] <- "booklet_id"
+pisa18_responses <- pisa18_m %>% 
+  select(person_id, item_id, item_score, booklet_id, ESCS_IRT, PV1READ) %>%
+  drop_na(item_score) %>%
+  unique()
+
+# compute plausible values
+PV_MATH_IRT <- dexter::plausible_values(pisa18_responses, covariates = c("ESCS_IRT", "PV1READ"), nPV = 10)
+```
+
+#### Regression new ESCS (item level)
+
+```{r}
+# create 10 SEM models
+model1_IRT <- "
+PV1 ~ 1 + ESCS_IRT
+"
+
+model2_IRT <- "
+PV2 ~ 1 + ESCS_IRT
+"
+
+model3_IRT <- "
+PV3 ~ 1 + ESCS_IRT
+"
+
+model4_IRT <- "
+PV4 ~ 1 + ESCS_IRT
+"
+
+model5_IRT <- "
+PV5 ~ 1 + ESCS_IRT
+"
+
+model6_IRT <- "
+PV6 ~ 1 + ESCS_IRT
+"
+
+model7_IRT <- "
+PV7 ~ 1 + ESCS_IRT
+"
+
+model8_IRT <- "
+PV8 ~ 1 + ESCS_IRT
+"
+
+model9_IRT <- "
+PV9 ~ 1 + ESCS_IRT
+"
+
+model10_IRT <- "
+PV10 ~ 1 + ESCS_IRT
+"
+
+models_IRT <- c(model1_IRT, model2_IRT, model3_IRT, model4_IRT, model5_IRT, model6_IRT,
+                model7_IRT, model8_IRT, model9_IRT, model10_IRT)
+reg_coef_IRT <- c(rep(0,10))
+p_value_IRT <- c(rep(0,10))
+
+# fit SEM models
+for(model in models_IRT){
+  fit <- sem(model, data=PV_MATH_IRT)
+  B <- summary(fit)[[5]]$est[2] # regression coefficient
+  P <- summary(fit)[[5]]$pvalue[2] # pvalue
+  reg_coef_IRT[match(model,models_IRT)] <- B
+  p_value_IRT[match(model,models_IRT)] <- P
+}
+
+# mean regression coefficient
+mean(reg_coef_IRT) 
+
+# mean p-value 
+mean(p_value_IRT)
+```
+
+#### Ranking of countries on MATH using new ESCS (item level)
+
+18 countries have the same ranking as in the PISA ranking. 53 countries have a different ranking. 
+
+```{r}
+# add CNT to PV_MATH_IRT
+data_CNT <- data %>% 
+  select(CNTSTUID, CNT) 
+colnames(data_CNT)[colnames(data_CNT) == "CNTSTUID"] <- "person_id"
+PV_MATH_IRT <- merge(PV_MATH_IRT, data_CNT, by = "person_id")
+
+# take country mean
+PV_MATH_mean_IRT <- PV_MATH_IRT %>% group_by(CNT) %>% 
+  summarize(mean1 = mean(PV1), mean2 = mean(PV2),
+            mean3 = mean(PV3), mean4 = mean(PV4),
+            mean5 = mean(PV5), mean6 = mean(PV6),
+            mean7 = mean(PV7), mean8 = mean(PV8),
+            mean9 = mean(PV9), mean10 = mean(PV10),
+            sd1 = sd(PV1), sd2 = sd(PV2),
+            sd3 = sd(PV3), sd4 = sd(PV4),
+            sd5 = sd(PV5), sd6 = sd(PV6),
+            sd7 = sd(PV7), sd8 = sd(PV8),
+            sd9 = sd(PV9), sd10 = sd(PV10)) %>%
+  rowwise() %>%
+  mutate(mean_MATH_IRT = mean(c(mean1, mean2, mean3, mean4, mean5, 
+                                mean6, mean7, mean8, mean9, mean10))) %>%
+  mutate(sd_MATH_IRT = mean(c(sd1, sd2, sd3, sd4, sd5, 
+                              sd6, sd7, sd8, sd9, sd10)))
+
+# make the current ranking based on the new ESCS
+PV_MATH_mean_IRT <- PV_MATH_mean_IRT %>% arrange(desc(mean_MATH_IRT))
+PV_MATH_mean_IRT$ourranking <- 1:nrow(PV_MATH_mean_IRT)
+ranking_PV_MATH_mean_IRT <- PV_MATH_mean_IRT %>% select(CNT, ourranking)
+
+# merge the rankings together with the "original" ranking
+rankings <- merge(ranking_MATH_mean, ranking_PV_MATH_mean_IRT, by = "CNT")
+
+# merge the two rankings together
+rankings <- merge(ranking_MATH_mean, ranking_PV_MATH_mean_IRT, by = "CNT")
+
+# add green color if rankings match
+rankings <- rankings %>% mutate(color = ifelse(PISAranking == ourranking, 
+                                               "green", "black"))
+
+# merge colors with the data
+PV_MATH_mean_IRT <- merge(PV_MATH_mean_IRT, rankings, by = "CNT")
+
+# Change country codes into country names
+# KSV, QAZ, QCI, QMR, QRT, and TAP do not work with the function, so are coded seperately
+PV_MATH_mean_IRT$CNT[PV_MATH_mean_IRT$CNT == "KSV"] <- "Kosovo"
+PV_MATH_mean_IRT$CNT[PV_MATH_mean_IRT$CNT == "QAZ"] <- "Baku"
+PV_MATH_mean_IRT$CNT[PV_MATH_mean_IRT$CNT == "QCI"] <- "B-S-J-Z"
+PV_MATH_mean_IRT$CNT[PV_MATH_mean_IRT$CNT == "QMR"] <- "Moscow Region"
+PV_MATH_mean_IRT$CNT[PV_MATH_mean_IRT$CNT == "QRT"] <- "Tatarstan"
+PV_MATH_mean_IRT$CNT[PV_MATH_mean_IRT$CNT == "TAP"] <- "Chinese Taipei"
+PV_MATH_mean_IRT$CNT[PV_MATH_mean_IRT$CNT != "Kosovo" & PV_MATH_mean_IRT$CNT != "Baku" 
+          & PV_MATH_mean_IRT$CNT != "B-S-J-Z" & PV_MATH_mean_IRT$CNT != "Moscow Region"
+          & PV_MATH_mean_IRT$CNT != "Tatarstan" & PV_MATH_mean_IRT$CNT != "Chinese Taipei"] <- 
+  countrycode(PV_MATH_mean_IRT$CNT[PV_MATH_mean_IRT$CNT != "Kosovo" & PV_MATH_mean_IRT$CNT != "Baku" 
+              & PV_MATH_mean_IRT$CNT != "B-S-J-Z" & PV_MATH_mean_IRT$CNT != "Moscow Region"
+              & PV_MATH_mean_IRT$CNT != "Tatarstan" & PV_MATH_mean_IRT$CNT != "Chinese Taipei"],
+  "iso3c", "country.name")
+
+# make the plot
+ranking_plot_IRT <- ggplot(data = PV_MATH_mean_IRT, aes(x = mean_MATH_IRT, 
+                                y = reorder(CNT,mean_MATH_IRT), color = color)) +
+  scale_color_identity() +
+  geom_point() +
+  geom_errorbar(aes(xmin = mean_MATH_IRT - sd_MATH_IRT, 
+                    xmax = mean_MATH_IRT + sd_MATH_IRT)) +
+  xlab("Mean MATH ability") +
+  ylab("Country")
+ranking_plot_IRT
+```
+
+#### Correlation between original and new MATH (per country)
+
+```{r}
+# create dataframes for correlation
+data_cor_c <- data.frame(MATH_c = PV_MATH_mean_c$mean_MATH_c, 
+                         CNT = PV_MATH_mean_c$CNT)
+data_cor_orig <- data.frame(MATH = MATH_mean$mean_MATH, 
+                            CNT = MATH_mean$CNT)
+data_cor_IRT <- data.frame(MATH_IRT = PV_MATH_mean_IRT$mean_MATH_IRT, 
+                           CNT = PV_MATH_mean_IRT$CNT)
+data_cor1 <- merge(data_cor_c, data_cor_orig, by = "CNT")
+data_cor2 <- merge(data_cor_IRT, data_cor_orig, by = "CNT")
+
+# indicator level
+cor(data_cor1$MATH, data_cor1$MATH_c)
+
+# item level
+cor(data_cor2$MATH, data_cor2$MATH_IRT)
+```
+
+#### Correlation between new ESCS and new MATH 
+
+```{r}
+# original
+cor1 <- cor(PV_MATH$PV1, PV_MATH$ESCS, use = "pairwise.complete.obs")
+cor2 <- cor(PV_MATH$PV2, PV_MATH$ESCS, use = "pairwise.complete.obs")
+cor3 <- cor(PV_MATH$PV3, PV_MATH$ESCS, use = "pairwise.complete.obs")
+cor4 <- cor(PV_MATH$PV4, PV_MATH$ESCS, use = "pairwise.complete.obs")
+cor5 <- cor(PV_MATH$PV5, PV_MATH$ESCS, use = "pairwise.complete.obs")
+cor6 <- cor(PV_MATH$PV6, PV_MATH$ESCS, use = "pairwise.complete.obs")
+cor7 <- cor(PV_MATH$PV7, PV_MATH$ESCS, use = "pairwise.complete.obs")
+cor8 <- cor(PV_MATH$PV8, PV_MATH$ESCS, use = "pairwise.complete.obs")
+cor9 <- cor(PV_MATH$PV9, PV_MATH$ESCS, use = "pairwise.complete.obs")
+cor10 <- cor(PV_MATH$PV10, PV_MATH$ESCS, use = "pairwise.complete.obs")
+meancor <- mean(c(cor1, cor2, cor3, cor4, cor5, cor6, cor7, cor8, cor9, cor10))
+meancor
+
+# indicator level
+cor1_c <- cor(PV_MATH_c$PV1, PV_MATH_c$ESCS_c)
+cor2_c <- cor(PV_MATH_c$PV2, PV_MATH_c$ESCS_c)
+cor3_c <- cor(PV_MATH_c$PV3, PV_MATH_c$ESCS_c)
+cor4_c <- cor(PV_MATH_c$PV4, PV_MATH_c$ESCS_c)
+cor5_c <- cor(PV_MATH_c$PV5, PV_MATH_c$ESCS_c)
+cor6_c <- cor(PV_MATH_c$PV6, PV_MATH_c$ESCS_c)
+cor7_c <- cor(PV_MATH_c$PV7, PV_MATH_c$ESCS_c)
+cor8_c <- cor(PV_MATH_c$PV8, PV_MATH_c$ESCS_c)
+cor9_c <- cor(PV_MATH_c$PV9, PV_MATH_c$ESCS_c)
+cor10_c <- cor(PV_MATH_c$PV10, PV_MATH_c$ESCS_c)
+meancor_c <- mean(c(cor1_c, cor2_c, cor3_c, cor4_c, cor5_c, cor6_c, cor7_c, cor8_c, cor9_c, cor10_c))
+meancor_c
+
+# item level
+cor1_IRT <- cor(PV_MATH_IRT$PV1, PV_MATH_IRT$ESCS_IRT, use = "pairwise.complete.obs")
+cor2_IRT <- cor(PV_MATH_IRT$PV2, PV_MATH_IRT$ESCS_IRT, use = "pairwise.complete.obs")
+cor3_IRT <- cor(PV_MATH_IRT$PV3, PV_MATH_IRT$ESCS_IRT, use = "pairwise.complete.obs")
+cor4_IRT <- cor(PV_MATH_IRT$PV4, PV_MATH_IRT$ESCS_IRT, use = "pairwise.complete.obs")
+cor5_IRT <- cor(PV_MATH_IRT$PV5, PV_MATH_IRT$ESCS_IRT, use = "pairwise.complete.obs")
+cor6_IRT <- cor(PV_MATH_IRT$PV6, PV_MATH_IRT$ESCS_IRT, use = "pairwise.complete.obs")
+cor7_IRT <- cor(PV_MATH_IRT$PV7, PV_MATH_IRT$ESCS_IRT, use = "pairwise.complete.obs")
+cor8_IRT <- cor(PV_MATH_IRT$PV8, PV_MATH_IRT$ESCS_IRT, use = "pairwise.complete.obs")
+cor9_IRT <- cor(PV_MATH_IRT$PV9, PV_MATH_IRT$ESCS_IRT, use = "pairwise.complete.obs")
+cor10_IRT <- cor(PV_MATH_IRT$PV10, PV_MATH_IRT$ESCS_IRT, use = "pairwise.complete.obs")
+meancor_IRT <- mean(c(cor1_IRT, cor2_IRT, cor3_IRT, cor4_IRT, cor5_IRT, cor6_IRT, cor7_IRT, cor8_IRT, cor9_IRT, cor10_IRT))
+meancor_IRT
+
+# plot (only an estimation of the relation using the first plausible value
+rela_math_escs_orig <- ggplot(data = data, aes(x = PV1MATH, y = ESCS)) + 
+  geom_point(alpha = 0.05) +
+  ylab("Original ESCS") +
+  xlab("Original Plausible Value 1 Math")
+rela_math_escs_orig
+rela_math_escs_c <- ggplot(data = PV_MATH_c, aes(x = PV1, y = ESCS_c)) + 
+  geom_point(alpha = 0.05) +
+  ylab("Indicator level ESCS") +
+  xlab("Indicator level Plausible Value 1 Math")
+rela_math_escs_c
+rela_math_escs_irt <- ggplot(data = PV_MATH_IRT, aes(x = PV1, y = ESCS_IRT)) + geom_point(alpha = 0.05) +
+  ylab("Item level ESCS") +
+  xlab("Item level Plausible Value 1 Math")
+rela_math_escs_irt
+# all look about linear, as expected
+```
+
+
+
+
+
+
+
+
+

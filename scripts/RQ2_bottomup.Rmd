@@ -1,0 +1,984 @@
+---
+title: 'Research Question 2: Can ESCS be modelled differently using IRT?'
+author: "Kirsten van Kessel"
+date: "2024-04-25"
+output: html_document
+---
+
+#### Setup 
+
+We load the complete dataset containing all questionnaire items. 
+
+```{r, warning=FALSE, message=FALSE, echo = TRUE, results = 'hide'}
+# load libraries
+library(haven)
+library(dplyr)
+library(tidyr)
+library(mice)
+library(missMethods)
+library(ggplot2)
+library(countrycode)
+library(broom)
+library(lme4)
+library(dexterMML)
+library(ggcorrplot)
+
+# load data
+data <- read_sav("CY07_MSU_STU_QQQ.sav")
+head(data)
+
+# set seed
+set.seed(679)
+
+# create cognitive variables out of their plausible values
+data$MATH <- data %>% dplyr::select(PV1MATH:PV10MATH) %>% cbind() %>% apply(1, mean)
+data$READ <- data %>% dplyr::select(PV1READ:PV10READ) %>% cbind() %>% apply(1, mean)
+data$SCIE <- data %>% dplyr::select(PV1SCIE:PV10SCIE) %>% cbind() %>% apply(1, mean)
+
+```
+
+#### Make a figure of the mean ESCS per country
+
+```{r}
+# remove haven labels
+data$ESCS <- zap_labels(data$ESCS)
+data$ESCS <- as.numeric(data$ESCS)
+data$CNT <- zap_labels(data$CNT)
+data$CNT <- as.character(data$CNT)
+
+# create list of countries
+country_list <- unique(data$CNT)
+
+# create dataframe to save
+data_plot <- as.data.frame(matrix(0, nrow = length(country_list), ncol = 3))
+colnames(data_plot) <- c("country", "mean", "sd")
+data_plot$country <- country_list
+
+for (country in country_list) {
+  mean <- mean(data$ESCS[data$CNT == country], na.rm = TRUE)
+  sd <- sd(data$ESCS[data$CNT == country], na.rm = TRUE)
+  data_plot$country[data_plot$country == country] <- country
+  data_plot$mean[data_plot$country == country] <- mean
+  data_plot$sd[data_plot$country == country] <- sd
+}
+
+# change codes into country names
+data_plot$country[data_plot$country == "KSV"] <- "Kosovo"
+data_plot$country[data_plot$country == "QAZ"] <- "Baku"
+data_plot$country[data_plot$country == "QCI"] <- "B-S-J-Z"
+data_plot$country[data_plot$country == "QMR"] <- "Moscow Region"
+data_plot$country[data_plot$country == "QRT"] <- "Tatarstan"
+data_plot$country[data_plot$country == "TAP"] <- "Chinese Taipei"
+data_plot$country[data_plot$country != "Kosovo" & data_plot$country != "Baku" 
+          & data_plot$country != "B-S-J-Z" & data_plot$country != "Moscow Region"
+          & data_plot$country != "Tatarstan" & data_plot$country != "Chinese Taipei"] <- 
+  countrycode(data_plot$country
+              [data_plot$country != "Kosovo" & data_plot$country != "Baku" 
+              & data_plot$country != "B-S-J-Z" & data_plot$country != "Moscow Region"
+              & data_plot$country != "Tatarstan" & data_plot$country != "Chinese Taipei"],
+  "iso3c", "country.name")
+
+ESCS_mean_plot <- 
+  ggplot(data_plot, aes(x=mean, y=reorder(country,mean), xmin = mean-sd, xmax = mean+sd)) + 
+  geom_point() +
+  ggtitle("The means of ESCS per country") +
+  geom_errorbarh() +
+  ylab("Country") +
+  xlab("Mean ESCS")
+ESCS_mean_plot
+```
+
+
+#### Explore the relation between ESCS items and the cognitive variables
+
+```{r}
+# select all items we want to know the correlation of
+ESCS_items <- data %>% select(CNT,
+                              CNTSTUID,
+                              MATH,
+                              READ,
+                              SCIE,
+                              ST005Q01TA,  # highest level of schooling completed by mother
+                              ST006Q01TA:ST006Q04TA, # Does mother have this qualification?
+                              ST007Q01TA,  # highest level of schooling completed by father
+                              ST008Q01TA:ST008Q04TA, # Does father have this qualification?
+                              #OCOD1, # ISCO-08 occupational code mother
+                              #OCOD2, # ISCO-08 occupational code father
+                              #BMMJ1, # ISEI of mother
+                              #BFMJ2, # ISEI of father
+                              ST011Q01TA:ST011Q16NA, # Do you have this in your home? 
+                              ST011D17TA:ST011D19TA, # Do you have this in your home? CNT
+                              ST012Q01TA:ST012Q09NA, # How many of this in your home?
+                              ST013Q01TA             # How many books in your home?
+                              ) %>% zap_labels()
+
+# we do not include the occupation of the parents, because of the variable type 
+# (either a continuous variable or a variable with about 600 categories)
+
+# multiple linear regression predicting MATH using all items (not READ and SCIE)
+model_math <- lm(data = ESCS_items, MATH ~ . - READ - SCIE) 
+#summary(model_math)
+
+# make excel table to inspect values
+# write.csv(tidy(model_math), "linear_model_math.csv")
+
+# multiple linear regression predicting READ using all items (not MATH and SCIE)
+model_read <- lm(data = ESCS_items, READ ~ . - MATH - SCIE)
+#summary(model_read)
+# write.csv(tidy(model_read), "linear_model_read.csv")
+
+# multiple lienar regression predicting SCIE using all items (not READ and MATH)
+model_scie <- lm(data = ESCS_items, SCIE ~ . - READ - MATH)
+#summary(model_scie)
+
+# make excel table to inspect values
+# write.csv(tidy(model_math), "linear_model_math.csv")
+# write.csv(tidy(model_read), "linear_model_read.csv")
+# write.csv(tidy(model_scie), "linear_model_scie.csv")
+```
+
+### All countries seperately
+
+#### Prepare data for IRT model using all items on country level
+
+```{r}
+# select binary variables to recode
+data_binary <- ESCS_items %>% dplyr::select(ST006Q01TA:ST006Q04TA,
+                                            ST008Q01TA:ST008Q04TA,
+                                            ST011Q01TA:ST011Q16NA)
+
+# Recode binary variables
+ESCS_items <- ESCS_items %>% mutate_at(vars(all_of(colnames(data_binary))), list(~recode(., '1' = 1, '2' = 0)))
+
+# select ST011 country specific variables
+data_ST011_CS <- ESCS_items %>% dplyr::select(ST011D17TA:ST011D19TA)
+
+# Make ST011 country specific variables numeric
+ESCS_items[colnames(data_ST011_CS)] <- sapply(ESCS_items[colnames(data_ST011_CS)],as.numeric) 
+# make function to recode CS variables to 0, 1, NA
+recode_CS <- function(var){
+  var[var %% 2 == 0 & var < 9999996] <- 0
+  var[var %% 2 == 1 & var < 9999996] <- 1
+  var[var >= 9999997] <- NA
+  return(var)
+}
+
+# apply function
+ESCS_items[colnames(data_ST011_CS)] <- sapply(ESCS_items[colnames(data_ST011_CS)],recode_CS)
+
+# select ST012 and ST013
+data_rest <- ESCS_items %>% dplyr::select(ST012Q01TA:ST013Q01TA)
+
+# make sure they have a 0 value
+ESCS_items[colnames(data_rest)] <- ESCS_items[colnames(data_rest)] - 1
+
+# make function to recode ST005 and ST007
+recode_five <- function(var){
+  var[var == 5] <- 0
+  var[var == 4] <- 1
+  var[var == 3] <- 2
+  var[var == 2] <- 3
+  var[var == 1] <- 4
+  return(var)
+}
+
+# select ST005 and ST007
+data_five <- ESCS_items %>% dplyr::select(ST005Q01TA, ST007Q01TA)
+
+# apply function
+ESCS_items[colnames(data_five)] <- sapply(ESCS_items[colnames(data_five)],recode_five)
+
+
+# All categorical variables are now ready for an IRT analysis
+```
+
+#### 2PL IRT model using all items on country level
+
+```{r}
+# make long format dataset
+ESCS_items_long <- ESCS_items %>% pivot_longer(cols = ST005Q01TA:ST013Q01TA,
+                                               names_to = "item",
+                                                    values_to = "item_score")
+
+# create variable item_id
+ESCS_items_long$item_id <- ESCS_items_long$item
+
+# change name to person_id
+colnames(ESCS_items_long)[colnames(ESCS_items_long) == 'CNTSTUID'] <- 'person_id'
+
+# give all the CS variables an unique item_id per country
+items_CS <- ESCS_items %>% select(ST005Q01TA:ST013Q01TA) %>% colnames()
+for(var in items_CS){
+  ESCS_items_long$item_id[ESCS_items_long$item_id == var] <- paste(
+                                    ESCS_items_long$item[ESCS_items_long$item_id == var], 
+                                    ESCS_items_long$CNT[ESCS_items_long$item_id == var], 
+                                    sep = "_")
+}
+
+# drop the items where a score is missing
+ESCS_items_long_complete <- ESCS_items_long %>% drop_na(item_score)
+
+responses <- ESCS_items_long_complete %>% dplyr::select(person_id, item_id, item_score)
+
+# remove items that either have only value 0 or do not have value 0
+`%notin%` <- Negate(`%in%`)
+baddies <- c("ST006Q03TA_POL", "ST008Q03TA_POL", "ST005Q01TA_CAN", "ST005Q01TA_JPN", "ST005Q01TA_POL", "ST007Q01TA_CAN", "ST007Q01TA_JPN","ST007Q01TA_POL")
+responses <- responses %>% 
+  filter(item_id %notin% baddies)
+
+# estimate the parameters
+parms_2PL <- dexterMML::fit_2pl(responses) 
+coef(parms_2PL)
+# did not converge because of alpha parameters near zero
+
+# inspect alpha parameters in Excel
+#write.csv(coef(parms_2PL), "inspect_alpha.csv")
+
+# remove items with an alpha between -0.2 and 0.2 
+baddies2 <- c("ST011D19TA_LUX", "ST008Q04TA_DEU", "ST012Q01TA_MLT", "ST012Q01TA_MLT", "ST012Q01TA_MLT", "ST012Q01TA_DEU", "ST012Q01TA_DEU", "ST012Q01TA_DEU", "ST006Q04TA_RUS",
+"ST012Q01TA_FIN", "ST012Q01TA_FIN", "ST012Q01TA_FIN", "ST012Q01TA_CZE", "ST012Q01TA_CZE", "ST012Q01TA_CZE", "ST008Q04TA_QAZ", "ST012Q01TA_NLD", "ST012Q01TA_NLD", "ST012Q01TA_NLD", "ST012Q01TA_CHE", "ST012Q01TA_CHE", "ST012Q01TA_CHE", "ST008Q03TA_JPN", "ST006Q04TA_KAZ", "ST007Q01TA_KSV", "ST007Q01TA_KSV", "ST012Q01TA_GBR", "ST012Q01TA_GBR", "ST012Q01TA_GBR", "ST006Q04TA_GEO", "ST008Q04TA_RUS", "ST012Q01TA_AUT", "ST012Q01TA_AUT", "ST012Q01TA_AUT", "ST008Q04TA_KAZ", "ST008Q03TA_HRV", "ST012Q01TA_IRL", "ST012Q01TA_IRL", "ST012Q01TA_IRL", "ST012Q01TA_HUN", "ST012Q01TA_HUN", "ST012Q01TA_HUN", "ST012Q01TA_BEL", "ST012Q01TA_BEL", "ST012Q01TA_BEL", "ST008Q04TA_NZL", "ST008Q04TA_QRT", "ST008Q03TA_DNK", "ST008Q04TA_ROU", "ST006Q04TA_POL", "ST008Q04TA_QMR", "ST006Q04TA_NZL", "ST006Q04TA_ROU", "ST012Q01TA_AUS", "ST012Q01TA_AUS", "ST012Q01TA_AUS", "ST006Q03TA_UKR", "ST008Q03TA_BLR", "ST012Q01TA_NZL", "ST012Q01TA_NZL", "ST012Q01TA_NZL", "ST006Q04TA_FIN", "ST008Q03TA_UKR", "ST006Q04TA_QMR", "ST006Q04TA_QAZ", "ST012Q01TA_FRA", "ST012Q01TA_FRA", "ST012Q01TA_FRA", "ST012Q01TA_LUX", "ST012Q01TA_LUX", "ST012Q01TA_LUX", "ST008Q04TA_ISL", "ST006Q04TA_DEU", "ST006Q04TA_QRT", "ST006Q04TA_USA", "ST012Q01TA_USA", "ST012Q01TA_USA", "ST012Q01TA_USA", "ST006Q04TA_GRC", "ST008Q04TA_POL", "ST012Q01TA_TAP", "ST012Q01TA_TAP", "ST012Q01TA_TAP", "ST008Q04TA_GEO", "ST006Q03TA_HRV", "ST012Q01TA_SVN", "ST012Q01TA_SVN", "ST012Q01TA_SVN", "ST006Q03TA_GRC", "ST006Q03TA_AUS", "ST008Q04TA_GRC", "ST006Q04TA_ISL", "ST011D18TA_AUT", "ST012Q01TA_ESP", "ST012Q01TA_ESP", "ST012Q01TA_ESP", "ST007Q01TA_LBN", "ST007Q01TA_LBN", "ST012Q01TA_ISR", "ST012Q01TA_ISR", "ST012Q01TA_ISR", "ST008Q04TA_NOR", "ST006Q04TA_JPN", "ST012Q02TA_JPN", "ST012Q02TA_JPN", "ST012Q02TA_JPN", "ST008Q03TA_DEU", "ST008Q04TA_FIN", "ST012Q01TA_KOR", "ST012Q01TA_KOR", "ST012Q01TA_KOR", "ST012Q01TA_ISL", "ST012Q01TA_ISL", "ST012Q01TA_ISL", "ST006Q04TA_HUN", "ST007Q01TA_MEX", "ST007Q01TA_MEX", "ST006Q03TA_DNK", "ST012Q01TA_DNK", "ST012Q01TA_DNK", "ST012Q01TA_DNK", "ST012Q01TA_CAN", "ST012Q01TA_CAN", "ST012Q01TA_CAN", "ST006Q03TA_ESP", "ST012Q01TA_ITA", "ST012Q01TA_ITA", "ST012Q01TA_ITA", "ST006Q04TA_NOR")
+responses <- responses %>% 
+  filter(item_id %notin% baddies2)
+
+#estimate parameters aqain
+parms_2PL <- dexterMML::fit_2pl(responses) 
+coef(parms_2PL)
+```
+
+#### Test if the 2PL country level ESCS measure performs better than PISA's ESCS measure
+
+```{r}
+# calculate theta: the ability estimate
+theta_2PL <- dexterMML::ability.mml(responses, parms_2PL, method = "WLE")
+ESCS_items_long_complete <- ESCS_items_long_complete %>% 
+  mutate(person_id = as.character(person_id))
+theta_2PL <- theta_2PL %>% 
+  inner_join(ESCS_items_long_complete)
+
+# correlations ESCS and cognitive variables
+cor(theta_2PL$theta, theta_2PL$MATH, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$MATH, use = "pairwise.complete.obs") # PISA ESCS
+
+cor(theta_2PL$theta, theta_2PL$READ, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$READ, use = "pairwise.complete.obs") # PISA ESCS
+
+cor(theta_2PL$theta, theta_2PL$SCIE, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$SCIE, use = "pairwise.complete.obs") # PISA ESCS
+
+# prediction cognitive variables
+model_math1 <- lm(data = theta_2PL, MATH ~ theta)
+summary(model_math1)
+model_math2 <- lm(data = data, MATH ~ ESCS)
+summary(model_math2)
+
+model_read1 <- lm(data = theta_2PL, READ ~ theta)
+summary(model_read1)
+model_read2 <- lm(data = data, READ ~ ESCS)
+summary(model_read2)
+
+model_scie1 <- lm(data = theta_2PL, SCIE ~ theta)
+summary(model_scie1)
+model_scie2 <- lm(data = data, SCIE ~ ESCS)
+summary(model_scie2)
+
+# PISA's ESCS has a higher correlation with the cognitive variables and
+# explains much more variance in a regression model
+
+# reshape from long to wide format
+theta_wide <- theta_2PL %>% select(CNT, person_id, MATH, READ, SCIE, theta) %>%
+  distinct(.keep_all = TRUE)
+
+# multilevel regression
+mlm_math1_0 <- lmer(data = theta_wide, MATH ~ 1 + (1 | CNT))
+summary(mlm_math1_0) # ICC = 0.31
+mlm_math1_1 <- lmer(data = theta_wide, MATH ~ theta + (1 | CNT))
+summary(mlm_math1_1)
+AIC(mlm_math1_1) # AIC = 6885150
+mlm_math1_2 <- lmer(data = theta_wide, MATH ~ theta + (theta | CNT))
+summary(mlm_math1_2) 
+AIC(mlm_math1_2) # AIC = 6878073
+
+mlm_math2_0 <- lmer(data = data, MATH ~ 1 + (1 | CNT))
+summary(mlm_math2_0) # ICC = 0.31
+mlm_math2_1 <- lmer(data = data, MATH ~ ESCS + (1 | CNT))
+summary(mlm_math2_1)
+AIC(mlm_math2_1) # AIC = 6819403
+mlm_math2_2 <- lmer(data = data, MATH ~ ESCS + (ESCS | CNT))
+summary(mlm_math2_2)
+AIC(mlm_math2_2) # AIC = 6813354
+
+# even if we take the multilevel structure into account, PISA's ESCS performs better
+
+# Is this because the occupation of the parents is not included? 
+# Is this because it includes both parents instead of the highest scoring parent?
+```
+
+#### 1PL IRT model using all items on country level
+
+```{r}
+# run 1PL and estimate coefficients
+parms_1PL <- dexterMML::fit_1pl(responses)
+coef(parms_1PL)
+
+# calculate theta: the ability estimate
+theta_1PL <- dexterMML::ability.mml(responses, parms_1PL, method = "WLE")
+ESCS_items_long_complete <- ESCS_items_long_complete %>% 
+  mutate(person_id = as.character(person_id))
+theta_1PL <- theta_1PL %>% 
+  inner_join(ESCS_items_long_complete)
+
+# correlations ESCS and cognitive variables
+cor(theta_1PL$theta, theta_1PL$MATH, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$MATH, use = "pairwise.complete.obs") # PISA ESCS
+
+cor(theta_1PL$theta, theta_1PL$READ, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$READ, use = "pairwise.complete.obs") # PISA ESCS
+
+cor(theta_1PL$theta, theta_1PL$SCIE, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$SCIE, use = "pairwise.complete.obs") # PISA ESCS
+
+# correlation of new ESCS is always lower then the correlation of the PISA ESCS
+```
+### 2. All countries together
+
+#### 2PL IRT model taking all countries together
+
+```{r}
+# take the dataset used for the 2PL taking all countries separately
+ESCS_items_long_complete2 <- ESCS_items_long_complete
+
+# make sure item_id does not include country anymore
+ESCS_items_long_complete2$item_id <- ESCS_items_long_complete2$item
+
+# select only the responses needed for the IRT model
+responses2 <- ESCS_items_long_complete2 %>% dplyr::select(person_id, item_id, item_score, CNT)
+
+# fit 2PL model 
+parms_2PL_2 <- dexterMML::fit_2pl(responses2)
+coef <- coef(parms_2PL_2)
+
+# No warnings: the model is more robust
+# No items need to be excluded from the model
+
+# calculate theta: the ability estimate
+theta_2PL_2 <- dexterMML::ability.mml(responses2, parms_2PL_2, method = "WLE")
+# still a warning when guessing ability
+ESCS_items_long_complete2 <- ESCS_items_long_complete2 %>% 
+  mutate(person_id = as.character(person_id))
+theta_2PL_2 <- theta_2PL_2 %>% 
+  inner_join(ESCS_items_long_complete2)
+
+# convert to wide format
+theta_wide_2 <- theta_2PL_2 %>% select(CNT, person_id, MATH, READ, SCIE, theta, se) %>%
+  distinct(.keep_all = TRUE)
+
+# correlations ESCS and cognitive variables
+cor(theta_wide_2$theta, theta_wide_2$MATH, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$MATH, use = "pairwise.complete.obs") # PISA ESCS
+
+cor(theta_wide_2$theta, theta_wide_2$READ, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$READ, use = "pairwise.complete.obs") # PISA ESCS
+
+cor(theta_wide_2$theta, theta_wide_2$SCIE, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$SCIE, use = "pairwise.complete.obs") # PISA ESCS
+
+# the correlation using PISA's ESCS is still higher, but not as much 
+```
+
+#### Plotting the betas of the 2PL
+
+```{r}
+# create dataset
+data_2PL_2 <- coef(parms_2PL_2)
+
+# plot betas per item
+ggplot(data_2PL_2, aes(x=item_id, y=beta)) +
+  geom_point() +
+  coord_flip() +
+  geom_errorbar(aes(ymin=beta-SE_beta, ymax=beta+SE_beta), width=.2, 
+                position=position_dodge(0.05))
+
+ggplot(data_2PL_2, aes(x=item_id, y=SE_beta)) +
+  geom_point() +
+  coord_flip()
+```
+
+#### 1PL IRT model taking all countries together
+
+```{r}
+# fit 1PL model 
+parms_1PL_2 <- dexterMML::fit_2pl(responses2)
+coef(parms_1PL_2)
+
+# No warnings: the model is more robust
+# No items need to be excluded from the model
+
+# calculate theta: the ability estimate
+theta_1PL_2 <- dexterMML::ability.mml(responses2, parms_1PL_2, method = "WLE")
+# still a warning when guessing ability
+ESCS_items_long_complete2 <- ESCS_items_long_complete2 %>% 
+  mutate(person_id = as.character(person_id))
+theta_1PL_2 <- theta_1PL_2 %>% 
+  inner_join(ESCS_items_long_complete2)
+
+# convert to wide format
+theta_wide_3 <- theta_1PL_2 %>% select(CNT, person_id, MATH, READ, SCIE, theta, se) %>%
+  distinct(.keep_all = TRUE)
+
+# correlations ESCS and cognitive variables
+cor(theta_wide_3$theta, theta_wide_3$MATH, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$MATH, use = "pairwise.complete.obs") # PISA ESCS
+
+cor(theta_wide_3$theta, theta_wide_3$READ, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$READ, use = "pairwise.complete.obs") # PISA ESCS
+
+cor(theta_wide_3$theta, theta_wide_3$SCIE, use = "pairwise.complete.obs") # new ESCS
+cor(data$ESCS, data$SCIE, use = "pairwise.complete.obs") # PISA ESCS
+
+# the correlation using PISA's ESCS is still higher
+```
+
+#### Plotting the betas of the 1PL
+
+```{r}
+# create dataset
+data_1PL_2 <- coef(parms_1PL_2)
+
+# plot betas per item
+ggplot(data_1PL_2, aes(x=item_id, y=beta)) +
+  geom_point() +
+  coord_flip() +
+  geom_errorbar(aes(ymin=beta-SE_beta, ymax=beta+SE_beta), width=.2, 
+                position=position_dodge(0.05))
+
+ggplot(data_1PL_2, aes(x=item_id, y=SE_beta)) +
+  geom_point() +
+  coord_flip()
+```
+
+### Inspect occupational status parents
+
+```{r}
+# data$OCOD1 # ISCO-08 occupational code mother
+# data$OCOD2 # ISCO-08 occupational code father
+# data$BMMJ1 # ISEI of mother
+# data$BFMJ2 # ISEI of father
+
+# create dataframe with occupation and cognitive variables
+data_occupation <- data %>% dplyr::select(MATH, READ, SCIE, BMMJ1, BFMJ2, HISEI)
+
+# create variable for mean occupation value
+data_occupation$MISEI <- data_occupation %>% dplyr::select(BMMJ1, BFMJ2) %>% cbind() %>% 
+  apply(1, mean)
+
+# create variable for lowest occupation value
+data_occupation$LISEI <- data_occupation %>% dplyr::select(BMMJ1, BFMJ2) %>% cbind() %>% 
+  apply(1, min)
+
+# inspect correlation
+cor(data_occupation, use = "pairwise.complete.obs")
+
+# make into dataframe
+data_cor <- cor(data_occupation, use = "pairwise.complete.obs")
+data_cor <- as.data.frame(data_cor)
+ggcorrplot(data_cor[1:3, 4:8], colors = c("red", "white", "darkblue"),
+           lab = TRUE)
+
+# correlation between occupational status and the cognitive variables is highest
+# if the mean occupational value is used
+
+# regression models
+summary(lm(data = data_occupation, MATH ~ BMMJ1)) # mother
+summary(lm(data = data_occupation, MATH ~ BFMJ2)) # father
+summary(lm(data = data_occupation, MATH ~ HISEI)) # highest
+summary(lm(data = data_occupation, MATH ~ MISEI)) # mean
+summary(lm(data = data_occupation, MATH ~ LISEI)) # lowest
+
+# 1. Mean ISEI: 14.13% explained
+# 2. Lowest ISEI: 12.35% explained
+# 3. Highest ISEI: 11.63% explained
+# 4. Mother's ISEI: 11.19% explained
+# 5. Father's ISEI: 8.07% explained
+
+# explained variance is highest if we use the mean occupation
+
+# plot the relation between MATH and the occupation variables
+ggplot(data_occupation, aes(x = MATH, y = BMMJ1)) + geom_point()
+ggplot(data_occupation, aes(x = MATH, y = BFMJ2)) + geom_point()
+ggplot(data_occupation, aes(x = MATH, y = HISEI)) + geom_point()
+ggplot(data_occupation, aes(x = MATH, y = MISEI)) + geom_point()
+ggplot(data_occupation, aes(x = MATH, y = LISEI)) + geom_point()
+# they look about linear, but hard to see with this many datapoints
+```
+
+#### Inspect education parents (misschien overbodig / te veel werk)
+
+```{r}
+#ST005Q01TA  # highest level of schooling completed by mother
+#ST006Q01TA:ST006Q04TA # Does mother have this qualification?
+#ST007Q01TA # highest level of schooling completed by father
+#ST008Q01TA:ST008Q04TA # Does father have this qualification?
+
+# inspect all together
+summary(lm(data = data, MATH ~ ST005Q01TA + ST006Q01TA + ST006Q02TA + ST006Q03TA + ST006Q04TA + ST007Q01TA + ST008Q01TA + ST008Q02TA + ST008Q03TA + ST008Q04TA))
+# explains 15% of variance
+
+# qualification mother 
+summary(lm(data = data, MATH ~ ST005Q01TA + ST006Q01TA + ST006Q02TA + ST006Q03TA + ST006Q04TA))
+# explains 12.15% of variance
+
+# only ISCED of mother
+summary(lm(data = data, MATH ~ ST005Q01TA))
+# explains 8.36% of variance
+
+# qualifications father
+summary(lm(data = data, MATH ~ ST007Q01TA + ST008Q01TA + ST008Q02TA + ST008Q03TA + ST008Q04TA))
+# explains 10.97% of variance
+
+# only ISCED of father
+summary(lm(data = data, MATH ~ ST007Q01TA))
+# explains 7.79% of variance
+
+# HISCED
+summary(lm(data = data, MATH ~ HISCED))
+# explains only 6.03% of variance
+
+# why does HISCED only explain 6.03% when the ISCED of mother and father both explain more and there is much more information available?
+```
+
+#### Take max score beta and plot se for countries all taken together
+
+The beta in the PISA results are equal to the betas for the max score of an item. Therefore we only inspect these beta values. 
+
+```{r}
+# models cnt together = parms_1PL_2 and parms_2PL_2
+
+# take the coefficients of the 2PL with all countries together
+coef <- coef(parms_2PL_2)
+
+# make a variable for max score per item
+coef <- coef %>% group_by(item_id) %>% mutate(max_score=max(item_score))
+
+# keep only the betas of the items where the item score is the max score
+coef2 <- coef[coef$item_score == coef$max_score,]
+coef2 <- coef2 %>% 
+  mutate(color = ifelse(item_id == "ST011Q07TA" | item_id == "ST011Q08TA" |
+                          item_id == "ST012Q03TA" | item_id == "ST011D17TA" |
+                          item_id == "ST011D18TA" | item_id == "ST011D19TA",
+                          "red", 
+                        ifelse(item_id == "ST011Q01TA" | item_id == "ST011Q05TA" |
+                                 item_id == "ST011Q09TA" | item_id == "ST011Q11TA" |
+                                 item_id == "ST011Q12TA" | item_id == "ST011Q16NA" |
+                                 item_id == "ST012Q01TA" | item_id == "ST012Q02TA" |
+                                 item_id == "ST012Q05NA" | item_id == "ST012Q06NA" |
+                                 item_id == "ST012Q07NA", "orange",
+                               ifelse(item_id == "ST011Q02TA" | item_id == "ST011Q02TA" |
+                                        item_id == "ST011Q03TA" | item_id == "ST011Q04TA" |
+                                        item_id == "ST011Q06TA" | item_id == "ST011Q10TA" |
+                                        item_id == "ST012Q04TA" | item_id == "ST012Q08NA" |
+                                        item_id == "ST012Q09NA" | item_id == "ST013Q01TA",
+                                      "green", 
+                                      "black"))))
+
+# plot SEs
+ggplot(coef2, aes(x=SE_beta, y=item_id, color = color)) + geom_point() +
+  scale_color_identity()
+```
+
+#### Take max score beta and plot se for countries all seperatelty
+
+```{r}
+# models cnt seperate = parms_1PL and parms_2PL
+
+# take the coefficients of the 2PL with all countries together
+coef <- coef(parms_2PL)
+
+# split item_id into item and country (so we can plot per item)
+coef$item_id <- strsplit(coef$item_id, '_')
+coef$CNT <- sapply(coef$item_id, function(x) x[length(x)])
+coef$item_id <- sapply(coef$item_id, function(x) x[1])
+
+
+# make a variable for max score per item
+coef <- coef %>% group_by(item_id) %>% mutate(max_score=max(item_score))
+
+# keep only the betas of the items where the item score is the max score
+coef2 <- coef[coef$item_score == coef$max_score,]
+
+coef2 <- coef2 %>% 
+  mutate(color = ifelse(item_id == "ST011Q07TA" | item_id == "ST011Q08TA" |
+                          item_id == "ST012Q03TA" | item_id == "ST011D17TA" |
+                          item_id == "ST011D18TA" | item_id == "ST011D19TA",
+                          "red", 
+                        ifelse(item_id == "ST011Q01TA" | item_id == "ST011Q05TA" |
+                                 item_id == "ST011Q09TA" | item_id == "ST011Q11TA" |
+                                 item_id == "ST011Q12TA" | item_id == "ST011Q16NA" |
+                                 item_id == "ST012Q01TA" | item_id == "ST012Q02TA" |
+                                 item_id == "ST012Q05NA" | item_id == "ST012Q06NA" |
+                                 item_id == "ST012Q07NA", "orange",
+                               ifelse(item_id == "ST011Q02TA" | item_id == "ST011Q02TA" |
+                                        item_id == "ST011Q03TA" | item_id == "ST011Q04TA" |
+                                        item_id == "ST011Q06TA" | item_id == "ST011Q10TA" |
+                                        item_id == "ST012Q04TA" | item_id == "ST012Q08NA" |
+                                        item_id == "ST012Q09NA" | item_id == "ST013Q01TA",
+                                      "green", 
+                                      "black"))))
+
+# plot betas
+ggplot(coef2, aes(x=beta, y=item_id, color = color)) + geom_point() +
+  scale_color_identity()
+
+# plot SD
+coef2 <- coef2 %>% group_by(item_id) %>% mutate(SD = sd(beta))
+ggplot(coef2, aes(x=SD, y=item_id, color = color)) + geom_point() +
+  scale_color_identity()
+
+
+
+# plot facet_wrap
+plot_names <- c('black' = "Not in PISA IRT",
+                'green' = "Same parameters in every country",
+                'orange' = "Different parameters in some countries",
+                'red' = "Different parameters in every country")
+item_plot <- ggplot(coef2, aes(x=beta, y=item_id)) + 
+  geom_point() +
+  facet_wrap(vars(color), labeller = as_labeller(plot_names)) +
+  xlab("Beta value") + 
+  ylab("Item ID") + 
+  ggtitle("Beta values as estimated for different countries per item") +
+  theme(plot.title = element_text(hjust = 0.5))
+item_plot
+# ggsave(item_plot, filename = "IRT_item_plot.png", height = 12, width = 6)
+
+# plot SE? No SE to plot
+```
+
+#### Investigate results of table 
+
+The large standard deviation might be the result of a coding mistake. First, we make sure that this is not the case by checking the distributions of the answers over categories. Second, we investigate the distributions per outlying country to check if there is something wrong with the measurement. 
+
+```{r}
+# Some items have a very large standard deviation
+# Are the answers categorical? How many categories?
+
+# ST012Q01TA
+invest_1201 <- responses %>% filter(startsWith(item_id, "ST012Q01TA"))
+table(invest_1201$item_score) # looks alright
+
+# ST011D19TA
+invest_1119 <- responses %>% filter(startsWith(item_id, "ST011D19TA"))
+table(invest_1119$item_score) # looks alright
+
+# ST011D18TA
+invest_1118 <- responses %>% filter(startsWith(item_id, "ST011D18TA"))
+table(invest_1118$item_score) # looks alright
+
+# ST011D17TA
+invest_1117 <- responses %>% filter(startsWith(item_id, "ST011D17TA"))
+table(invest_1117$item_score) # looks alright
+
+# ST008Q04TA
+invest_0804 <- responses %>% filter(startsWith(item_id, "ST008Q04TA"))
+table(invest_0804$item_score) # looks alright
+
+# ST008Q03TA
+invest_0803 <- responses %>% filter(startsWith(item_id, "ST008Q03TA"))
+table(invest_0803$item_score) # looks alright
+
+# ST007Q01TA
+invest_0701 <- responses %>% filter(startsWith(item_id, "ST007Q01TA"))
+table(invest_0701$item_score) # one category missing
+
+# ST006Q04TA
+invest_0604 <- responses %>% filter(startsWith(item_id, "ST006Q04TA"))
+table(invest_0604$item_score) # looks alright
+
+# All answer categories look reasonable and answers are distributed over all categories
+# Sometimes a little scewed, but all categories have enough answers
+
+# What countries are outliers? Let's look at the distribution within country 
+
+# ST012Q01TA has one visible outliers on the negative side
+coef2 %>% filter(item_id == "ST012Q01TA") %>% arrange(desc(beta))
+table(responses[responses$item_id == "ST012Q01TA_SWE",]$item_score)
+
+# ST011D19TA has one visible outlier on the negative side and one on the positive side
+coef2 %>% filter(item_id == "ST011D19TA") %>% arrange(desc(beta))
+table(responses[responses$item_id == "ST011D19TA_IRL",]$item_score)
+table(responses[responses$item_id == "ST011D19TA_LVA",]$item_score)
+
+# ST011D18TA has one visible outlier on the negative side
+coef2 %>% filter(item_id == "ST011D18TA") %>% arrange(desc(beta)) %>% select(CNT)
+table(responses[responses$item_id == "ST011D18TA_DNK",]$item_score)
+# again skewed
+
+# ST011D17TA has one visible outlier on the negative side 
+coef2 %>% filter(item_id == "ST011D17TA") %>% arrange(desc(beta))
+table(responses[responses$item_id == "ST011D17TA_SVN",]$item_score)
+# again skewed
+
+# ST011Q08TA has one visible outlier on the negative side 
+coef2 %>% filter(item_id == "ST011Q08TA") %>% arrange(desc(beta))
+table(responses[responses$item_id == "ST011Q08TA_PER",]$item_score)
+
+# ST011Q12TA has one visible outlier on the negative side 
+coef2 %>% filter(item_id == "ST011Q12TA") %>% arrange(desc(beta))
+table(responses[responses$item_id == "ST011Q12TA_MEX",]$item_score)
+# again skewed
+
+# ST008Q04TA has two visible outliers on the negative side and two on the positive side
+coef2 %>% filter(item_id == "ST008Q04TA") %>% arrange(desc(beta))
+table(responses[responses$item_id == "ST008Q04TA_CHE",]$item_score)
+table(responses[responses$item_id == "ST008Q04TA_AUT",]$item_score)
+table(responses[responses$item_id == "ST008Q04TA_AUS",]$item_score)
+table(responses[responses$item_id == "ST008Q04TA_JPN",]$item_score)
+
+# ST008Q03TA has one visible outlier on the negative side
+coef2 %>% filter(item_id == "ST008Q03TA") %>% arrange(desc(beta))
+table(responses[responses$item_id == "ST008Q03TA_FIN",]$item_score)
+
+# ST007Q01TA has two visible outliers on the negative side 
+coef2 %>% filter(item_id == "ST007Q01TA") %>% arrange(desc(beta))
+table(responses[responses$item_id == "ST007Q01TA_LVA",]$item_score) # one category missing
+table(responses[responses$item_id == "ST007Q01TA_GEO",]$item_score) # one category missing
+
+# ST006Q04TA has one visible outlier on the negative side
+coef2 %>% filter(item_id == "ST006Q04TA") %>% arrange(desc(beta))
+table(responses[responses$item_id == "ST006Q04TA_AUS",]$item_score)
+
+# ST006Q03TA has one visible outlier on the negative side and one on the positive side
+coef2 %>% filter(item_id == "ST006Q03TA") %>% arrange(desc(beta))
+table(responses[responses$item_id == "ST006Q03TA_ITA",]$item_score)
+table(responses[responses$item_id == "ST006Q03TA_FIN",]$item_score)
+
+# Most distributions are skewed, but no categories are missing / have almost no answers
+# Except for on ST007Q01TA
+# It does not look like a bad measurement
+```
+
+#### ST012Q01TA in dept
+
+ST012Q01TA asks how many televisions there are in the pupil's home. In PISA, this item has the same parameter for most countries, but a separate for some countries. In PISA these countries are the United Arab Emirates/Dubai (Arabic), Argentina (Spanish), Chile (Spanish), Hong Kong (China) (English), Hong Kong (China) (Chinese), Korea (Korean), Qatar (Arabic) and the United States (English). However, when we investigate the betas of our IRT analysis, these countries are not the outliers. Instead, Sweden is the clear outlier. Other countries on the edge of the distribution are Croatia, Poland, Japan and Estonia. Remarkebly, these countries are mostly located in Europe, while the countries seperated by PISA are all in North- and South America and Asia. 
+
+#### ST011D19TA in dept
+
+ST011D19TA asks if a pupil has "country specific wealth item 3". In PISA, this item has different parameters in every country. However, the betas in our IRT analysis suggests that the countries could use (about) the same parameter. However, there are three outliers, namely Ireland and Latvia. This suggests that the third country specific wealth item of these countries might not be comparable to the third country specific wealth items of other countries and might therefore be poorly chosen. 
+
+#### ST011D18TA in dept 
+
+ST011D18TA asks if a pupil has "country specific wealth item 2". In PISA, this item has different parameters in every country. However, the betas in our IRT analysis suggests that the countries could use (about) the same parameter. However, there is one outlier, namely Denmark. This suggests that the second country specific wealth item of this country might not be comparable to the second country specific wealth items of other countries and might therefore be poorly chosen. 
+
+#### ST011D17TA in dept 
+
+ST011D17TA asks if a pupil has "country specific wealth item 1". In PISA, this item has different parameters in every country. However, the betas in our IRT analysis suggests that the countries could use (about) the same parameter. However, there is one outlier, namely Slovenia. This suggests that the first country specific wealth item of Slovenia might not be comparable to the first country specific wealth items of other countries and might therefore be poorly chosen. 
+
+#### ST011Q08TA in dept
+
+ST011Q08TA asks if a pupil has books of poetry in their home. In PISA, this item has different parameters in every country. However, the betas in our IRT analysis suggests that the countries could use (about) the same parameter. However, there is one outlier, namely Peru. 
+
+#### ST011Q12TA in dept
+
+ST011Q12TA asks if a pupil has a dictionary in their home. In PISA, this item has different parameters in some countries. In PISA, these countries are Qatar (Arabic) and Saudi Arabia (Arabic, English). However, when we investigate the betas of our IRT analysis, these countries are not the outliers. Instead, Mexico is the clear outlier.
+
+#### ST008Q04TA in dept x
+
+ST008Q04TA asks if the father of the pupil has a ISCED level 4 training. In PISA, this item is not included in an IRT analysis, but only in the PCA model in the calculation of the HISCED indicator. The betas of our IRT analysis suggest that Switserland, Austria, Australia and Japan are outliers. 
+
+#### ST008Q03TA in dept
+
+ST008Q03TA asks if the father of the pupil has a ISCED level 5 training. In PISA, this item is not included in an IRT analysis, but only in the PCA model in the calculation of the HISCED indicator. The betas of our IRT analysis suggest that Finland is an outlier. 
+
+#### ST007Q01TA in dept
+
+ST007Q01TA asks what the highest level of schooling completed by the father of the pupil is. In PISA, this item is not included in an IRT analysis, but only in the PCA model in the calculation of the HISCED indicator. The betas of our IRT analysis suggest that Latvia and Georgia are outliers. Both have a notable distribution: Two categories (ISCED level 3B, 3C and ISCED level 2) have no answers. 
+
+#### ST006Q04TA in dept
+
+ST006Q04TA asks if the mother of the pupil has a ISCED level 4 training. In PISA, this item is not included in an IRT analysis, but only in the PCA model in the calculation of the HISCED indicator. The betas of our IRT analysis suggest that Australia is an outlier. Note that Australia is also an outlier on ST008Q04TA (ISCED level 4 training father).
+
+#### ST006Q03TA in dept
+
+ST006Q03TA asks if the mother of the pupil has a ISCED level 5B training. In PISA, this item is not included in an IRT analysis, but only in the PCA model in the calculation of the HISCED indicator. The betas of our IRT analysis suggest that Italy and Finland are outliers. 
+
+#### Advise?
+
+There seems little to no support for the seperate estimation of parameters that currently are estimated separately by PISA. The advise for PISA would be to reevaluate which countries have separately estimated parameters. 
+
+#### Adding HISEI into the IRT?
+
+According to Ganzeboom,de Graaf, Treiman & de Leeuw the ISEI codes can be devided into seven groups, which can be recognized by the first digit: 
+
+(0~1000) Professional, technical, and related workers
+(2000) Administrative and managerial workers
+(3000) Clerical and related workers
+(4000) Sales workers
+(5000) Service workers
+(6000) Agricultural, animal husbandry and forestry
+workers, fishermen and hunters
+(7~8~9000) Production and related workers, transport
+equipment operators, and laborers
+
+So can we using this scale make the ISEI variables of the mother and the father into seven categories? And can we than include it in the IRT analysis?
+
+```{r}
+# data$OCOD1 # ISCO-08 occupational code mother
+# data$OCOD2 # ISCO-08 occupational code father
+
+# make into characters
+data$OCOD1 <- as.character(data$OCOD1)
+data$OCOD2 <- as.character(data$OCOD2)
+
+# recode values into categories
+data$OCOD1_r <- ifelse(startsWith(data$OCOD1, '0'), '0', 
+                      ifelse(startsWith(data$OCOD1, '1'), '0',
+                      ifelse(startsWith(data$OCOD1, '2'), '1',
+                      ifelse(startsWith(data$OCOD1, '3'), '2',
+                      ifelse(startsWith(data$OCOD1, '4'), '3',
+                      ifelse(startsWith(data$OCOD1, '5'), '4',
+                      ifelse(startsWith(data$OCOD1, '6'), '5',
+                      ifelse(startsWith(data$OCOD1, '7'), '6',
+                      ifelse(startsWith(data$OCOD1, '8'), '6',
+                      ifelse(startsWith(data$OCOD1, '9'), '6',
+                             NA))))))))))
+data$OCOD1_r <- as.numeric(data$OCOD1_r)
+
+data$OCOD2_r <- ifelse(startsWith(data$OCOD2, '0'), '0', 
+                      ifelse(startsWith(data$OCOD2, '1'), '0',
+                      ifelse(startsWith(data$OCOD2, '2'), '1',
+                      ifelse(startsWith(data$OCOD2, '3'), '2',
+                      ifelse(startsWith(data$OCOD2, '4'), '3',
+                      ifelse(startsWith(data$OCOD2, '5'), '4',
+                      ifelse(startsWith(data$OCOD2, '6'), '5',
+                      ifelse(startsWith(data$OCOD2, '7'), '6',
+                      ifelse(startsWith(data$OCOD2, '8'), '6',
+                      ifelse(startsWith(data$OCOD2, '9'), '6',
+                             NA))))))))))
+data$OCOD2_r <- as.numeric(data$OCOD2_r)
+
+# add to the data
+ESCS_items <- data.frame(ESCS_items, OCOD1_r = data$OCOD1_r, OCOD2_r = data$OCOD2_r)
+
+# make long format dataset
+ESCS_items_long <- ESCS_items %>% pivot_longer(cols = ST005Q01TA:OCOD2_r,
+                                               names_to = "item",
+                                                    values_to = "item_score")
+
+# create variable item_id
+ESCS_items_long$item_id <- ESCS_items_long$item
+
+# change name to person_id
+colnames(ESCS_items_long)[colnames(ESCS_items_long) == 'CNTSTUID'] <- 'person_id'
+
+# give all the CS variables an unique item_id per country
+items_CS <- ESCS_items %>% select(ST005Q01TA:OCOD2_r) %>% colnames()
+for(var in items_CS){
+  ESCS_items_long$item_id[ESCS_items_long$item_id == var] <- paste(
+                                    ESCS_items_long$item[ESCS_items_long$item_id == var], 
+                                    ESCS_items_long$CNT[ESCS_items_long$item_id == var], 
+                                    sep = "_")
+}
+
+# drop the items where a score is missing
+ESCS_items_long_complete <- ESCS_items_long %>% drop_na(item_score)
+
+responses <- ESCS_items_long_complete %>% dplyr::select(person_id, item_id, item_score)
+
+# remove items that either have only value 0 or do not have value 0
+`%notin%` <- Negate(`%in%`)
+baddies <- c("ST006Q03TA_POL", "ST008Q03TA_POL", "ST005Q01TA_CAN", "ST005Q01TA_JPN", "ST005Q01TA_POL", "ST007Q01TA_CAN", "ST007Q01TA_JPN","ST007Q01TA_POL")
+responses <- responses %>% 
+  filter(item_id %notin% baddies)
+
+# remove items with an alpha between -0.1 and 0.1
+baddies2 <- c("ST011Q08TA_PAN", "ST006Q04TA_KAZ", "ST008Q04TA_NZL", "ST011D17TA_SVN", "ST007Q01TA_KSV", "ST012Q01TA_FRA", "ST012Q01TA_LUX", "ST012Q01TA_SVN", "ST008Q04TA_QAZ", "ST012Q01TA_NZL", "ST006Q04TA_POL", "ST008Q04TA_QRT", "ST006Q04TA_RUS", "ST008Q04TA_DEU", "ST012Q01TA_AUS", "ST011D18TA_AUT", "ST012Q01TA_TAP", "ST012Q01TA_IRL", "ST008Q04TA_ROU", "ST008Q03TA_DNK", "ST012Q01TA_HUN", "ST006Q04TA_NZL", "ST006Q04TA_FIN", "ST006Q04TA_ROU", "ST008Q04TA_KAZ", "ST012Q01TA_GBR", "ST012Q01TA_DNK", "ST012Q01TA_BEL", "ST008Q03TA_JPN", "ST008Q04TA_QMR", "ST006Q03TA_UKR", "ST008Q04TA_RUS", "ST012Q01TA_ISL", "ST012Q01TA_MLT", "ST006Q04TA_DEU", "ST006Q04TA_QRT", "ST012Q01TA_NLD", "ST008Q03TA_UKR", "ST008Q04TA_ISL", "ST012Q01TA_ESP", "ST012Q01TA_SWE", "ST011D19TA_LUX", "ST012Q01TA_USA", "ST011Q08TA_PER", "OCOD2_r_ARE", "ST008Q04TA_POL", "OCOD2_r_QAT", "ST006Q04TA_QAZ", "ST012Q01TA_KOR", "ST012Q01TA_DEU", "ST012Q02TA_JPN", "ST012Q01TA_CAN", "ST008Q03TA_HRV", "ST012Q01TA_ITA", "ST008Q03TA_BLR", "ST012Q01TA_FIN", "ST012Q01TA_ISR", "ST012Q01TA_POL", "ST012Q01TA_AUT", "ST008Q04TA_NOR")
+responses <- responses %>% 
+  filter(item_id %notin% baddies2)
+
+# estimate the parameters
+parms_2PL <- dexterMML::fit_2pl(responses)
+coef <- coef(parms_2PL)
+
+#write.csv(coef, "inspect_alpha2.csv")
+
+# split item_id into item and country (so we can plot per item)
+coef$item_id <- strsplit(coef$item_id, '_')
+coef$CNT <- sapply(coef$item_id, function(x) x[length(x)])
+coef$item_id <- sapply(coef$item_id, function(x) x[1])
+
+# make a variable for max score per item
+coef <- coef %>% group_by(item_id) %>% mutate(max_score=max(item_score))
+
+# keep only the betas of the items where the item score is the max score
+coef2 <- coef[coef$item_score == coef$max_score,]
+
+coef2 <- coef2 %>% 
+  mutate(color = ifelse(item_id == "ST011Q07TA" | item_id == "ST011Q08TA" |
+                          item_id == "ST012Q03TA" | item_id == "ST011D17TA" |
+                          item_id == "ST011D18TA" | item_id == "ST011D19TA",
+                          "red", 
+                        ifelse(item_id == "ST011Q01TA" | item_id == "ST011Q05TA" |
+                                 item_id == "ST011Q09TA" | item_id == "ST011Q11TA" |
+                                 item_id == "ST011Q12TA" | item_id == "ST011Q16NA" |
+                                 item_id == "ST012Q01TA" | item_id == "ST012Q02TA" |
+                                 item_id == "ST012Q05NA" | item_id == "ST012Q06NA" |
+                                 item_id == "ST012Q07NA", "orange",
+                               ifelse(item_id == "ST011Q02TA" | item_id == "ST011Q02TA" |
+                                        item_id == "ST011Q03TA" | item_id == "ST011Q04TA" |
+                                        item_id == "ST011Q06TA" | item_id == "ST011Q10TA" |
+                                        item_id == "ST012Q04TA" | item_id == "ST012Q08NA" |
+                                        item_id == "ST012Q09NA" | item_id == "ST013Q01TA",
+                                      "green", 
+                                      "black"))))
+
+# plot betas
+ggplot(coef2, aes(x=beta, y=item_id, color = color)) + geom_point() +
+  scale_color_identity()
+
+# plot facet_wrap
+plot_names <- c('black' = "Not in PISA IRT",
+                'green' = "Same parameters in every country",
+                'orange' = "Different parameters in some countries",
+                'red' = "Different parameters in every country")
+item_plot <- ggplot(coef2, aes(x=beta, y=item_id)) + 
+  geom_point() +
+  facet_wrap(vars(color), labeller = as_labeller(plot_names)) +
+  xlab("Beta value") + 
+  ylab("Item ID") + 
+  ggtitle("Beta values as estimated for different countries per item") +
+  theme(plot.title = element_text(hjust = 0.5))
+item_plot
+ggsave(item_plot, filename = "IRT_item_plot_r.png", height = 12, width = 6)
+
+# inspect how OCOD1 and OCOD2 predict MATH
+summary(lm(data = data, MATH ~ factor(OCOD1_r) + factor(OCOD2_r))) # together
+summary(lm(data = data, MATH ~ factor(OCOD1_r))) # only mother
+summary(lm(data = data, MATH ~ factor(OCOD2_r))) # only father
+
+# together they explain 15.53% of the variance, so it still predicts the cognitive 
+# variable math quite well
+
+# How do we select outliers?? 
+# Plot the SDs of the betas
+coef2 <- coef2 %>% group_by(item_id) %>% mutate(SD = sd(beta))
+ggplot(coef2, aes(x=SD, y=reorder(item_id,SD, decreasing=FALSE))) + 
+  geom_point() + 
+  geom_vline(xintercept=2, color = "blue") +
+  xlab("Standard Deviation") +
+  ylab("Item")
+  
+
+# Based on the graph, we select which items are estimated per country
+# We draw the line between ST011Q02TA and St012Q02TA. 
+```
+
+
+
+
+
+
+
+
+
+
+
+
