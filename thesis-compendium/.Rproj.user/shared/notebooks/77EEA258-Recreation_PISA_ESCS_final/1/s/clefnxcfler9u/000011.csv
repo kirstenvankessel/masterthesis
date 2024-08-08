@@ -1,7 +1,0 @@
-"0","# create a plot
-ESCS_plot <- ggplot(data_all, aes(x = ESCS_PISA, y = ESCS)) + geom_point(alpha = 0.05) +
-  ggtitle(""Comparing computed ESCS to the PISA ESCS"") +
-  xlab(""Computed ESCS"") + ylab(""PISA ESCS"") 
-"
-"2","Error: object 'data_all' not found
-"
