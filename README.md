@@ -23,7 +23,8 @@ research question. This datafile is created using a script made and owned by Rem
 
 To follow the order as discussed in the master's thesis, the scripts should be run in the following order:
 
-RQ1_Recreation_ESCS.Rmd - In this script the variables ESCS is recreated, as to check if we have a clear understanding of how ESCS is measured.
+[RQ1_Recreation_ESCS.Rmd](https://github.com/kirstenvankessel/masterthesis/blob/main/scripts/RQ1_Recreation_ESCS.Rmd) - In this script the variables ESCS is recreated, as to check if we 
+have a clear understanding of how ESCS is measured.
 
 RQ1_meas_invar_mgcfa.Rmd - In this script the multigroup confirmatory factor analysis is performed to check for measurement invariance. The modification indices are inspected and model
 parameters are changes as to minimize measurement invariance. 
