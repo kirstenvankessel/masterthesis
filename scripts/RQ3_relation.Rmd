@@ -54,7 +54,7 @@ data$PAREDINT <- as.numeric(scale(data$PAREDINT))
 # use script PISA_2018_mathematics to create database
 
 # load database
-pisa18_m <- readRDS("pisa18_m.RDS")
+pisa18_m <- readRDS("../data/pisa18_m.RDS")
 
 # select all plausible values of reading and the new ESCS
 data_read <- data %>% 
@@ -227,13 +227,13 @@ data$ESCS_c <- array(unlist(fscores))
 
 #### Create new MATH (indicator level)
 
-Code komt van Remco Feskens, zie document PISA_2018_mathematics. 
+Script PISA_2018_mathematics is made and owned by Remco Feskens. Please contact him for obtaining this document. 
 
 ```{r}
 # use script PISA_2018_mathematics to create database
 
 # load database
-pisa18_m <- readRDS("pisa18_m.RDS")
+pisa18_m <- readRDS("../data/pisa18_m.RDS")
 
 # invest database
 head(pisa18_m)
@@ -591,7 +591,7 @@ summary(data$ESCS_IRT)
 
 ```{r}
 # load database
-pisa18_m <- readRDS("pisa18_m.RDS")
+pisa18_m <- readRDS("../data/pisa18_m.RDS")
 
 # invest database
 head(pisa18_m)

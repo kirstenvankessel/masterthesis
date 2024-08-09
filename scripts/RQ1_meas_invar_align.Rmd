@@ -1,5 +1,5 @@
 ---
-title: "Research Question 2: How can we improve measurement invariance?"
+title: "Research Question 1: Is there measurement invariance?"
 author: "Kirsten van Kessel"
 date: "2024-01-16"
 output: html_document

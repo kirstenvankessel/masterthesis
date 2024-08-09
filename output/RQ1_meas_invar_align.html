@@ -13,7 +13,7 @@
 
 <meta name="date" content="2024-01-16" />
 
-<title>Research Question 2: How can we improve measurement invariance?</title>
+<title>Research Question 1: Is there measurement invariance?</title>
 
 <script>// Pandoc 2.9 adds attributes on both header and div. We remove the former (to
 // be compatible with the behavior of Pandoc < 2.8).
@@ -350,8 +350,8 @@ display: none;
 
 
 
-<h1 class="title toc-ignore">Research Question 2: How can we improve
-measurement invariance?</h1>
+<h1 class="title toc-ignore">Research Question 1: Is there measurement
+invariance?</h1>
 <h4 class="author">Kirsten van Kessel</h4>
 <h4 class="date">2024-01-16</h4>
 
@@ -371,7 +371,7 @@ library(countrycode)
 library(ggplot2)
 
 # load data
-data &lt;- read_sav(&quot;CY07_MSU_STU_QQQ.sav&quot;)
+data &lt;- read_sav(&quot;../data/CY07_MSU_STU_QQQ.sav&quot;)
 
 # select subset variables
 data &lt;- data %&gt;% select(CNT, CNTSTUID, LANGTEST_QQQ, ST011Q01TA:ST011Q16NA, ST011D17TA:ST011D19TA, ST012Q01TA:ST012Q09NA, ST013Q01TA, HOMEPOS, HISEI, PAREDINT, ESCS)
@@ -2498,9 +2498,9 @@ summary(model_align)</code></pre>
 ## Call:
 ## sirt::invariance.alignment(lambda = lambda, nu = nu)
 ## 
-## Date of Analysis: 2024-08-08 14:40:41.376539 
-## Time difference of 17.76342 secs
-## Computation Time: 17.76342 
+## Date of Analysis: 2024-08-08 15:43:19.025589 
+## Time difference of 4.368648 secs
+## Computation Time: 4.368648 
 ## 
 ## -----------------------------------------------------------------
 ## Optimization Function Value = 2.004 

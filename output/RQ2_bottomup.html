@@ -375,7 +375,7 @@ library(dexterMML)
 library(ggcorrplot)
 
 # load data
-data &lt;- read_sav(&quot;CY07_MSU_STU_QQQ.sav&quot;)
+data &lt;- read_sav(&quot;../data/CY07_MSU_STU_QQQ.sav&quot;)
 head(data)
 
 # set seed
@@ -826,7 +826,7 @@ summary(mlm_math1_1)</code></pre>
 ## 
 ## Fixed effects:
 ##              Estimate Std. Error t value
-## (Intercept) 461.27609    6.18440   74.59
+## (Intercept) 461.27609    6.18438   74.59
 ## theta        25.07951    0.09034  277.60
 ## 
 ## Correlation of Fixed Effects:
@@ -848,14 +848,14 @@ summary(mlm_math1_2) </code></pre>
 ## 
 ## Random effects:
 ##  Groups   Name        Variance Std.Dev. Corr
-##  CNT      (Intercept) 3020.37  54.96        
+##  CNT      (Intercept) 3020.50  54.96        
 ##           theta         66.75   8.17    0.15
 ##  Residual             5988.05  77.38        
 ## Number of obs: 596150, groups:  CNT, 79
 ## 
 ## Fixed effects:
 ##             Estimate Std. Error t value
-## (Intercept) 461.2882     6.1842   74.59
+## (Intercept) 461.2882     6.1844   74.59
 ## theta        25.4228     0.9245   27.50
 ## 
 ## Correlation of Fixed Effects:
