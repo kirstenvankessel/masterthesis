@@ -23,20 +23,20 @@ research question. This datafile is created using a script made and owned by Rem
 
 To follow the order as discussed in the master's thesis, the scripts should be run in the following order:
 
-RQ1_Recreation_ESCS - In this script the variables ESCS is recreated, as to check if we have a clear understanding of how ESCS is measured.
+RQ1_Recreation_ESCS.Rmd - In this script the variables ESCS is recreated, as to check if we have a clear understanding of how ESCS is measured.
 
-RQ1_meas_invar_mgcfa - In this script the multigroup confirmatory factor analysis is performed to check for measurement invariance. The modification indices are inspected and model
+RQ1_meas_invar_mgcfa.Rmd - In this script the multigroup confirmatory factor analysis is performed to check for measurement invariance. The modification indices are inspected and model
 parameters are changes as to minimize measurement invariance. 
 
-RQ1_meas_invar_align - In this script alignment optimization is performed to check for measurement invariance. 
+RQ1_meas_invar_align.Rmd - In this script alignment optimization is performed to check for measurement invariance. 
 
-RQ2_imputation_loop - In this script the simulation study is performed. Note that we do not simulate data. The same dataset is used, but samples of complete cases are taken and values are
+RQ2_imputation_loop.Rmd - In this script the simulation study is performed. Note that we do not simulate data. The same dataset is used, but samples of complete cases are taken and values are
 artificially made to be missing. This is done to inspect how well the imputation methods perform. The imputation methods are 1) Not imputing, 2) Stochastic regression imputation, and 3) 
 Multiple imputation. 
 
-RQ2_bottomup - In this script IRT analysis is performed to inspect if the model can be improved on the level of the items. 
+RQ2_bottomup.Rmd - In this script IRT analysis is performed to inspect if the model can be improved on the level of the items. 
 
-RQ3_relation - In this script two new measures of ESCS are tested against the original measure of ESCS in PISA. 
+RQ3_relation.Rmd - In this script two new measures of ESCS are tested against the original measure of ESCS in PISA. 
 
 # Ethics
 
