@@ -1,7 +1,7 @@
 # Design
 
-This study aims to research the measurment properties of Economic, Social, and Cultural Status (ESCS) using the 2018 data of the Programme for International Student Assessement (PISA).
-It does so using three questions: 
+In this repository, all code and output used for my master thesis can be found. This study aims to research the measurment properties of Economic, Social, and Cultural Status (ESCS) 
+using the 2018 data of the Programme for International Student Assessement (PISA). It does so using three questions: 
 
 1) To what extent is ESCS subject to measurement variance? This is researched using multigroup confirmatory factor analysis and alignment optimization. 
 
@@ -21,13 +21,13 @@ research question. This datafile is created using a script made and owned by Rem
 
 # Scripts
 
-To follow the order as discussed in the master's thesis, the scripts should be run in the following order:
+To follow the order as discussed in the thesis, the scripts should be run in the following order:
 
-[RQ1_Recreation_ESCS.Rmd](https://github.com/kirstenvankessel/masterthesis/blob/main/scripts/RQ1_Recreation_ESCS.Rmd) - In this script the variables ESCS is recreated, as to check if we 
+[RQ1_Recreation_ESCS.Rmd](https://github.com/kirstenvankessel/masterthesis/blob/main/scripts/RQ1_Recreation_ESCS.Rmd) - In this script the variables ESCS is recreated to check if we 
 have a clear understanding of how ESCS is measured.
 
 [RQ1_meas_invar_mgcfa.Rmd](https://github.com/kirstenvankessel/masterthesis/blob/main/scripts/RQ1_meas_invar_mgcfa.Rmd) - In this script the multigroup confirmatory factor analysis is 
-performed to check for measurement invariance. The modification indices are inspected and model parameters are changes as to minimize measurement invariance. 
+performed to check for measurement invariance. The modification indices are inspected and model parameters are changed to minimize measurement invariance. 
 
 [RQ1_meas_invar_align.Rmd](https://github.com/kirstenvankessel/masterthesis/blob/main/scripts/RQ1_meas_invar_align.Rmd) - In this script alignment optimization is performed to check for 
 measurement invariance. 
